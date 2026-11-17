@@ -180,7 +180,7 @@ PipesHub の `PropertyDefinition` にある `filterable` や `semanticLabel` は
 
 ### 索引の観察
 
-`ingest_inspection_ui.md` は画面の項目（状態、失敗理由、状態別件数、再処理）を決める。PipesHub のパスは知識ベース画面と `GET /api/v1/connectors/:id/stats`、`POST /api/v1/records/{id}/reindex` である。自作のパスはノートが指定していないので未決のまま、次の API で同じ項目を返す。
+`ingest_inspection_ui.md` は画面の項目（状態、失敗理由、状態別件数、再処理）を決める。パスは PipesHub に合わせた。記録画面が呼ぶ `GET /api/v1/knowledgeBase/record/{recordId}` と、Node が中継する先の `GET /api/v1/records/{recordId}` は同じ本体を返す。集計は `GET /api/v1/connectors/{kbId}/stats` である。再処理は `POST /api/v1/records/{recordId}/reindex` と、画面が先に呼ぶ `POST /api/v1/knowledgeBase/reindex/record/{recordId}` である。外部 id の GET、`GET /api/v1/kb/{kbId}/indexing/counts`、`POST .../reprocess` も残す。
 
 `GET /api/v1/kb/{kb_id}/records/{external_record_id}`
 
@@ -197,6 +197,38 @@ PipesHub の `PropertyDefinition` にある `filterable` や `semanticLabel` は
 ```
 
 `indexingStatus` が `IN_PROGRESS` のときだけ `embedDone` と `embedTotal` を付ける。PipesHub の知識ハブ行と同じ条件である（`knowledge_hub_service.py` の `_embed_progress`）。それ以外の状態ではこの2つを返さない。保存値が残っていても返さない。
+
+`GET /api/v1/records/{recordId}` と `GET /api/v1/knowledgeBase/record/{recordId}` は次を返す。`record.indexingStatus` と `record.reason` が、画面が読む項目である。`reason` は上の `failureReason` と同じ値で、`COMPLETED` と `EMPTY` では null である。`IN_PROGRESS` のときだけ `embedDone` と `embedTotal` を `record` に付ける。無い id は 404 `RECORD_NOT_FOUND` である。org、権限、抽出段階は無い。
+
+```json
+{
+  "record": {
+    "id": "...",
+    "recordName": "天気",
+    "externalRecordId": "doc-1",
+    "indexingStatus": "FAILED",
+    "reason": "QDRANT_UNAVAILABLE",
+    "version": 2
+  },
+  "knowledgeBase": {"id": "demo"}
+}
+```
+
+`GET /api/v1/connectors/{kbId}/stats` は、知識ベースをコネクタ id として扱う。PipesHub の応答は `success` と `data.stats` である（`build_connector_stats_response`）。こちらは件数だけを返す。`extractionStatus` と `entitiesStatus` と `orgId` は付けない。分類と org が無いからである。未知の id は 404 `KB_NOT_FOUND` である。
+
+```json
+{
+  "success": true,
+  "data": {
+    "connectorId": "demo",
+    "origin": "COLLECTION",
+    "stats": {
+      "total": 1,
+      "indexingStatus": {"QUEUED": 0, "IN_PROGRESS": 0, "COMPLETED": 1, "FAILED": 0, "EMPTY": 0}
+    }
+  }
+}
+```
 
 `GET /api/v1/kb/{kb_id}/indexing/counts`
 
@@ -406,9 +438,13 @@ BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定�
 
 問い合わせも同じトークナイザにかける。トークナイザごとに順位リストを1本作る。密ベクトルの順位リストを加え、RRF で融合する。
 
-`k` は 60 である。順位 `r` は 1 始まりで、寄与は `1 / (k + r)` である。リストに無い脚は 0 である。同じチャンクの寄与を足す。PipesHub のコレクション間 RRF は、重複ヒットに最大寄与だけを使う（`result_merging.py` の `ReciprocalRankFusionMerger`）。こちらは検索器が独立なので足す。Cormack の式である。`k` の既定値 60 は同じファイルの `DEFAULT_RRF_RANK_CONSTANT` である。
+各枝は、融合の前に `limit * 2` 件を取る。`limit` は retrieve の件数である。PipesHub の Qdrant 検索は、dense の Prefetch と sparse の Prefetch がどちらも `req.limit * 2` である（`services/vector_db/qdrant/utils.py` L280-L301、`acc3095`）。こちらは密が1枝、Sudachi が1枝、文字バイグラムが1枝で、枝ごとに同じ深さである。疎ベクトルは作らない。融合はアプリ側で行う。Qdrant の `FusionQuery` は使わない。
 
-融合方式を `rrf` 以外にした設定は、起動時に拒否する。方式名の枠だけ残す。実装するのは `rrf` だけである。別方式は未決である。
+`k` の既定は 60 である。順位 `r` は 1 始まりで、寄与は `1 / (k + r)` である。リストに無い脚は 0 である。同じチャンクの寄与を足す。PipesHub のコレクション間 RRF は、重複ヒットに最大寄与だけを使う（`result_merging.py` の `ReciprocalRankFusionMerger`）。こちらは検索器が独立なので足す。Cormack の式である。
+
+`fusion.k` は設定値である。既定 60 のまま、`fusion.k: 2` にすると Qdrant サーバ既定との対照ができる。k はベクトルもポスティングも変えない。フィンガープリントには入れない。設定を変えて API とワーカーを起動し直せば足りる。再索引は要らない。
+
+融合方式は RRF だけである。`fusion.method` が `rrf` 以外の設定は起動時に拒否する。方式名の枠は残す。DBSF も重み付き和も足さない。
 
 ## 取り込み CLI
 
@@ -443,7 +479,8 @@ BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定�
 | チャンク方針 B | `modules/transformers/vectorstore.py` `_build_text_documents`、`_slice_on_character_boundaries` |
 | Qdrant の作成引数 | `services/vector_db/qdrant/qdrant.py` `create_collection`、`services/vector_db/models.py` `CollectionConfig` |
 | retrieve の要求とチャンク | `api/routes/search.py` `RetrieveQuery`、`_retrieve_chunks` |
-| RRF の k=60 | `modules/retrieval/result_merging.py` |
+| 融合前の候補深さ `limit * 2` | `services/vector_db/qdrant/utils.py` L280-L309（`acc3095`）。方式は `Fusion.RRF` 固定で k は渡さない |
+| RRF の式と、コレクション間の k=60 | `modules/retrieval/result_merging.py` の `DEFAULT_RRF_RANK_CONSTANT` |
 | ストリーム名と封筒 | `services/messaging/redis_streams/indexing_consumer.py`、`redis_streams/producer.py`、`services/messaging/config.py` |
 | 再索引ルート | `connectors/api/router.py` の `POST /records/{record_id}/reindex` |
 | 状態別件数 | `connectors/api/router.py` の `GET /stats`、`services/graph_db/common/utils.py` の `build_connector_stats_response` |
@@ -458,6 +495,8 @@ BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定�
 - `rewriteQuery: true` は 400 である。LLM が無い。
 - スキーマのプロパティは型だけを見る。
 - 融合は検索器ごとの和である。PipesHub のコレクション間融合は最大寄与である。
+- dense とキーワードの RRF の k は 60 である。PipesHub が Qdrant に渡すハイブリッドは k を付けない。Qdrant v1.15 の既定は 2 で、式は `1/(position+2)`、position は 0 始まりである（`fusion_methods.md`）。k=60 は後段のコレクション間マージと、OpenSearch と Redis の値である。承認済み要件がこちらの融合に 60 を指定しているので、既定は 60 のままにする。対照は `fusion.k: 2` である。
+- 候補の深さは PipesHub と同じ `limit * 2` である。融合の場所は違う。PipesHub は Qdrant サーバの Prefetch 2 本（dense と sparse）で融合する。こちらは密を Qdrant から、キーワードを Postgres の BM25 から取り、アプリ側で足す。キーワード枝は Sudachi と文字バイグラムの 2 本である。
 - HTTP の `application/blocks` も Content-Type として許す。PipesHub の検査は `application/json` だけである。
 
 ## ノートで閉じた判断
@@ -466,14 +505,14 @@ BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定�
 
 `gui_settings_scope.md`（PipesHub `acc3095`）が次を決めている。HNSW `ef` 256、oversampling 1.5、検索画面の件数 10。retrieve の上限は、この依頼が「既定 10、上限 10」と指定したので 10 にする。PipesHub の `RetrieveQuery` 自体は既定 8、上限 50 である（`search.py`）。埋め込みモデルは、点が残っているあいだ変更できない（`embedding_switch_docs.md`）。
 
+`fusion_methods.md` が次を決めている。PipesHub が使う融合は RRF だけである。`Fusion.DBSF`、重み付き和、方式の切り替えは無い。`qdrant/utils.py` L304-L309（`acc3095`、`7aff0de` も同じ行）は `Fusion.RRF` を固定し、k を渡さない。`FusionMethod` の `ARITHMETIC_MEAN` と `HARMONIC_MEAN` は参照が無い。索引観察のパスも、同じノート群の `ingest_inspection_ui.md` が画面の呼ぶ先を書いているので、上のパスで閉じた。
+
 ## 未決
 
-ノートが決めていないものだけを残す。仮はベンチマークが確かめるための暫定であり、要件ではない。
+ノートが決めていないものだけを残す。仮はベンチマークが確かめるための暫定であり、要件ではない。1 の索引観察パスと 5 の融合方式は閉じた。番号は残したままである。
 
-1. 索引観察 API のパス。`ingest_inspection_ui.md` は画面の項目を決め、PipesHub のルートは `GET /api/v1/knowledgeBase/record/:recordId`、`GET /api/v1/connectors/:id/stats`、`POST /api/v1/records/{id}/reindex` である。自作側のパスは指定していない。仮は外部 id の GET、`GET /api/v1/kb/{kb_id}/indexing/counts`、`POST .../reprocess` と `POST /api/v1/records/{record_id}/reindex` である。選択肢は、この仮を維持する、件数を `/api/v1/stats` に改名する、知識ハブのノード一覧を足す、である。
 2. 文字バイグラムの前処理。要件はトークナイザ名だけである。`rag_sparse_compare.md` の表 A は NFKC と小文字化のあとでバイグラムを切っているが、それは比較記事の条件である。暫定は NFKC、小文字化、空白と制御文字を除いた隣接受符点である。選択肢は、生の符号点、空白だけ除く、Sudachi の語の中だけ、である。変わると再索引が要る。
 3. BM25 の `k1` と `b`。要件に無い。暫定は Okapi の標準であり fastembed `Qdrant/bm25` の既定でもある 1.2 と 0.75 である（`undecided_components.md` の項目 12、`fe_bm25_37c7.py`）。フィンガープリントには入れない。ベンチマークが確かめる。
 4. ruri-v3 の接頭辞。モデルカード（`cl-nagoya/ruri-v3-310m` の README、2026-11-17 取得）は、検索クエリに `検索クエリ: `、文書に `検索文書: ` を付ける。暫定はカードどおり文書とクエリで分ける。PipesHub の埋め込みサーバーは query と passage に同じ文字列を渡す（`japanese_support.md`）。ベンチマークが確かめる。
-5. 融合方式を `rrf` 以外にしたときの意味。枠だけあり、実装は起動時に拒否する。選択肢は、拒否を維持する、方式を足して再索引必須にする、である。
 6. Redis のレーン数。PipesHub の既定は 8（`undecided_components.md` の項目 24）。要件は Streams とだけ書いている。暫定はレーン 1 である。
 7. 表を方針 C のように行グループにするか。要件は方針 B だけを名指ししている。暫定は行をテキストとして方針 B で切る。LLM による `table_summary` の上書きはしない。

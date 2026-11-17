@@ -63,6 +63,10 @@ curl -sS -X POST http://127.0.0.1:43123/api/v1/index/reindex
 
 `scripts/measure.py` は `--run` を付け、API が応答するときだけ計測する。付けないときは終了コード 2 で、時間は出さない。
 
+融合は RRF だけである。既定の `fusion.k` は 60 である。Qdrant サーバ既定の 2 と比べるときは `config.yaml` の `fusion.k` を 2 にして API とワーカーを起動し直す。再索引は要らない。k は保存するベクトルを変えない。
+
+索引の状態は `GET /api/v1/knowledgeBase/record/{recordId}` と `GET /api/v1/records/{recordId}` が返す。件数は `GET /api/v1/connectors/{kbId}/stats` の `data.stats.indexingStatus` である。再処理は `POST /api/v1/records/{recordId}/reindex` である。
+
 ## テスト
 
 ```bash

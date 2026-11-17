@@ -332,11 +332,15 @@ class Engine:
             conn.commit()
 
     def search(self, query: str, *, limit: int, kb_ids: list[str] | None, max_per_record: int | None, bounds: dict) -> dict:
-        dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=100, kb_ids=kb_ids)
+        # Each branch fetches limit*2 before fusion. PipesHub's Qdrant prefetch
+        # does the same for one dense and one sparse leg (qdrant/utils.py
+        # L280-L301 at acc3095). Keyword legs are Postgres BM25, one per tokenizer.
+        depth = branch_depth(limit)
+        dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=depth, kb_ids=kb_ids)
         keyword_pairs: dict[str, list[tuple[str, float]]] = {}
         for name in ("sudachi", "char_bigram"):
             if name in self.settings.tokenizers:
-                keyword_pairs[name] = self._bm25(name, query)
+                keyword_pairs[name] = self._bm25(name, query, depth)
             else:
                 keyword_pairs[name] = []
         lists = [[cid for cid, _score in dense_pairs]]
@@ -404,7 +408,7 @@ class Engine:
             },
         }
 
-    def _bm25(self, tokenizer: str, query: str) -> list[tuple[str, float]]:
+    def _bm25(self, tokenizer: str, query: str, limit: int) -> list[tuple[str, float]]:
         terms = _terms(self.settings, tokenizer, query)
         if not terms:
             return []
@@ -426,7 +430,7 @@ class Engine:
                 counts[row["term"]] = int(row["tf"])
             corpus.tf[cid] = counts
             corpus.lengths[cid] = int(triples[0]["doc_len"])
-        return corpus.rank(terms)[:100]
+        return corpus.rank(terms)[:limit]
 
 
 def parent_of(payload: dict, index: int) -> int | None:
@@ -466,6 +470,11 @@ def _ms(moment: datetime) -> int:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return int(moment.timestamp() * 1000)
+
+
+def branch_depth(limit: int) -> int:
+    """Hits each retriever returns before RRF. Mirrors PipesHub Prefetch `limit * 2`."""
+    return limit * 2
 
 
 def has_indexable_text(envelope: Envelope) -> bool:

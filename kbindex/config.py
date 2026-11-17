@@ -30,7 +30,8 @@ class Settings:
     def index_fingerprint(self, *, hidden_size: int, max_seq_length: int) -> str:
         """Hash of the inputs that change vectors or postings.
 
-        `device` and BM25 `k1`/`b` stay out. They do not change stored bytes.
+        `device`, BM25 `k1`/`b`, and `fusion.k` stay out. They do not change
+        stored bytes. `fusion.k` is applied when a query is fused.
         """
         lines = [
             self.model,
@@ -38,7 +39,7 @@ class Settings:
             "B",
             ",".join(sorted(self.tokenizers)),
             f"{self.sudachi_mode} {str(self.sudachi_normalize).lower()}",
-            f"{self.fusion_method} {self.fusion_k}",
+            self.fusion_method,
             "検索文書: ",
             "検索クエリ: ",
         ]

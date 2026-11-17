@@ -216,6 +216,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _refused(_request: Request, exc: PushRefusal) -> JSONResponse:
         return JSONResponse(status_code=exc.status, content=error_body(exc))
 
+    @app.exception_handler(psycopg.Error)
+    def _postgres_down(_request: Request, exc: psycopg.Error) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content=error_body(PushRefusal(503, "POSTGRES_UNAVAILABLE", "Postgres is unavailable.")),
+        )
+
     @app.on_event("startup")
     def startup() -> None:
         os.makedirs(settings.data_dir, exist_ok=True)
@@ -389,14 +396,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
         return JSONResponse(status_code=202, content={"recordId": str(row["record_id"]), "indexingStatus": "QUEUED"})
 
+    @app.get("/api/v1/records/{record_id}")
+    def get_record_by_id(record_id: str) -> JSONResponse:
+        return _record_by_uuid(app, record_id)
+
+    @app.get("/api/v1/knowledgeBase/record/{record_id}")
+    def get_knowledge_base_record(record_id: str) -> JSONResponse:
+        return _record_by_uuid(app, record_id)
+
+    @app.get("/api/v1/connectors/{connector_id}/stats")
+    def connector_stats(connector_id: str) -> JSONResponse:
+        _require_kb(app, connector_id)
+        with app.state.db.connect() as conn:
+            counts = counts_for(conn, connector_id)
+        return JSONResponse(
+            {
+                "success": True,
+                "data": {
+                    "connectorId": connector_id,
+                    "origin": "COLLECTION",
+                    "stats": {"total": sum(counts.values()), "indexingStatus": counts},
+                },
+            }
+        )
+
     @app.post("/api/v1/records/{record_id}/reindex")
     async def reindex_record(record_id: str, request: Request) -> JSONResponse:
         await request.body()
-        with app.state.db.connect() as conn:
-            row = record_row(conn, record_id)
-        if row is None:
-            raise PushRefusal(404, "RECORD_NOT_FOUND", "Record not found.")
+        row = _load_record_uuid(app, record_id)
         return reprocess(row["kb_id"], row["external_record_id"])
+
+    @app.post("/api/v1/knowledgeBase/reindex/record/{record_id}")
+    async def reindex_knowledge_base_record(record_id: str, request: Request) -> JSONResponse:
+        return await reindex_record(record_id, request)
 
     @app.post("/api/v1/index/reindex")
     def reindex_all() -> JSONResponse:
@@ -492,6 +524,7 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
     previous = None
     wrote = False
     try:
+        conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(rid),))
         previous = lock_record(conn, rid)
         if previous is not None and previous["kb_id"] != kb_id:
             previous = None
@@ -783,6 +816,45 @@ def _success(existing, kb_id: str, status: str, changed: bool, event, envelope) 
         "event": event,
         "indexingStatus": existing["indexing_status"],
     }
+
+
+def _load_record_uuid(app, record_id: str):
+    try:
+        uuid.UUID(record_id)
+    except ValueError:
+        raise PushRefusal(404, "RECORD_NOT_FOUND", "Record not found.") from None
+    with app.state.db.connect() as conn:
+        row = record_row(conn, record_id)
+    if row is None:
+        raise PushRefusal(404, "RECORD_NOT_FOUND", "Record not found.")
+    return row
+
+
+def _record_by_uuid(app, record_id: str) -> JSONResponse:
+    return JSONResponse(_pipeshub_record(_load_record_uuid(app, record_id)))
+
+
+def _pipeshub_record(row) -> dict:
+    """Record inspection body on the PipesHub record paths.
+
+    The UI reads `record.indexingStatus` and `record.reason`. Stages this
+    service does not run (extraction, entities) are omitted.
+    """
+    status = _status_body(row)
+    record = {
+        "id": status["recordId"],
+        "recordName": row["record_name"],
+        "externalRecordId": status["externalRecordId"],
+        "indexingStatus": status["indexingStatus"],
+        "reason": status["failureReason"],
+        "version": status["version"],
+        "contentRev": status["contentRev"],
+        "updatedAt": status["updatedAt"],
+    }
+    if "embedDone" in status:
+        record["embedDone"] = status["embedDone"]
+        record["embedTotal"] = status["embedTotal"]
+    return {"record": record, "knowledgeBase": {"id": row["kb_id"]}}
 
 
 def _status_body(row) -> dict:

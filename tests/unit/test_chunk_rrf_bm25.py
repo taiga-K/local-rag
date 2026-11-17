@@ -6,13 +6,17 @@ PipesHub RRF: tests/unit/modules/retrieval/test_result_merging.py keeps the best
 We sum independent retrievers. Gap 3: table cells are not replaced by a summary.
 """
 
+import json
+
 from kbindex.bm25 import Corpus
 from kbindex.chunking import chunk_blocks
-from kbindex.db import chunk_public_id
+from kbindex.config import Settings
 from kbindex.contract import block_text, parse_envelope
+from kbindex.db import chunk_public_id
+from kbindex.embed import FakeEmbedder
+from kbindex.pipeline import Engine
 from kbindex.rrf import rrf_scores
 from kbindex.tokenize import char_bigrams, sudachi_terms
-import json
 
 
 def test_short_block_is_one_piece():
@@ -119,6 +123,77 @@ def test_rrf_tie_keeps_input_order():
     assert ranked == ["c", "a", "b"]
     assert dict(rrf_scores([["a"], []], k=60))["a"] == pytest_approx(1 / 61)
     assert dict(rrf_scores([["a"], ["a"]], k=60))["a"] == pytest_approx(2 / 61)
+
+
+def test_each_branch_fetches_twice_the_retrieve_limit():
+    """Candidate depth is the request limit times 2, then RRF uses fusion.k.
+
+    PipesHub: backend/python/app/services/vector_db/qdrant/utils.py L280-L309
+    at acc3095. One dense prefetch and one sparse prefetch, each limit*2,
+    fused with Fusion.RRF and no k (Qdrant default 2). The approved k here is 60.
+    """
+    class Vectors:
+        def __init__(self) -> None:
+            self.limits: list[int] = []
+
+        def search(self, vector, *, limit, kb_ids):
+            self.limits.append(limit)
+            return [("c1", 0.9), ("c2", 0.4)]
+
+    def row(chunk_id: str) -> dict:
+        return {
+            "chunk_id": chunk_id,
+            "text": chunk_id,
+            "external_record_id": "ext",
+            "record_name": "n",
+            "kb_id": "kb",
+            "block_index": 0,
+            "source_modified_ms": None,
+            "updated_at": None,
+        }
+
+    def run(k: int) -> tuple[dict, list[int]]:
+        vectors = Vectors()
+        engine = Engine(_fusion_settings(k), db=None, vectors=vectors, embedder=FakeEmbedder())
+        seen: dict[str, int] = {}
+
+        def bm25(tokenizer: str, query: str, limit: int):
+            seen[tokenizer] = limit
+            if tokenizer == "sudachi":
+                return [("c1", 3.0)]
+            return []
+
+        engine._bm25 = bm25
+        engine._filter_fused = lambda fused, kb_ids, bounds: [(cid, score, row(cid)) for cid, score in fused]
+        found = engine.search("晴れ", limit=4, kb_ids=None, max_per_record=None, bounds={})
+        return found, [vectors.limits[0], seen["sudachi"], seen["char_bigram"]]
+
+    found, depths = run(60)
+    assert depths == [8, 8, 8]
+    assert found["chunks"][0]["score"] == pytest_approx(2 / 61)
+    found_k2, depths_k2 = run(2)
+    assert depths_k2 == [8, 8, 8]
+    assert found_k2["chunks"][0]["score"] == pytest_approx(2 / 3)
+
+
+def _fusion_settings(k: int):
+    return Settings(
+        database_url="postgresql://kbindex@127.0.0.1/kbindex",
+        redis_url="redis://127.0.0.1/0",
+        qdrant_url="http://127.0.0.1:6333",
+        data_dir="/data/records",
+        model="cl-nagoya/ruri-v3-310m",
+        device="cpu",
+        backend="fake",
+        tokenizers=("sudachi", "char_bigram"),
+        sudachi_mode="C",
+        sudachi_normalize=True,
+        fusion_method="rrf",
+        fusion_k=k,
+        bm25_k1=1.2,
+        bm25_b=0.75,
+        api_port=43123,
+    )
 
 
 def test_rrf_rejects_non_positive_k():

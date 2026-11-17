@@ -8,7 +8,7 @@ and backend/python/tests/unit/api/routes/test_retrieve.py.
 import pytest
 
 from kbindex.api import admit, parse_retrieve
-from kbindex.config import Settings
+from kbindex.config import Settings, load_settings
 from kbindex.contract import MAX_BODY_BYTES, PushRefusal
 
 
@@ -84,6 +84,15 @@ def test_retrieve_bounds():
     assert day["bounds"]["modified_before"].tzinfo is not None
 
 
+def test_fusion_k_is_config(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("fusion:\n  method: rrf\n  k: 2\n", encoding="utf-8")
+    assert load_settings(str(path)).fusion_k == 2
+    path.write_text("fusion:\n  method: dbsf\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        load_settings(str(path))
+
+
 def test_query_and_document_prefixes_differ():
     from kbindex.embed import FakeEmbedder
 
@@ -100,5 +109,11 @@ def test_fingerprint_ignores_device_and_bm25():
     )
     renamed = _settings(model="other")
     assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) != renamed.index_fingerprint(
+        hidden_size=768, max_seq_length=8192
+    )
+    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) == _settings(fusion_k=2).index_fingerprint(
+        hidden_size=768, max_seq_length=8192
+    )
+    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) != _settings(fusion_method="other").index_fingerprint(
         hidden_size=768, max_seq_length=8192
     )

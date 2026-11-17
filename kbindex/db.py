@@ -146,7 +146,7 @@ class Database:
         self.dsn = dsn
 
     def connect(self) -> psycopg.Connection:
-        return psycopg.connect(self.dsn, row_factory=dict_row)
+        return psycopg.connect(self.dsn, row_factory=dict_row, connect_timeout=3)
 
     def migrate(self) -> None:
         with self.connect() as conn:
