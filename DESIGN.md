@@ -2,7 +2,7 @@
 
 参照コミットは [pipeshub-ai/pipeshub-ai@7aff0de37be83beac220e801b83e303bd4018911](https://github.com/pipeshub-ai/pipeshub-ai/tree/7aff0de37be83beac220e801b83e303bd4018911) である。この文書は実装の契約である。コードよりこちらを優先する。
 
-要件ノートは `uploads/` の個別ファイルとして読んだ。閉じた判断、暫定、未決は末尾に分ける。
+要件ノートは `uploads/` の個別ファイルとして読んだ。閉じた判断は末尾にまとめる。未決は残っていない。
 
 LLM は置かない。回答生成、クエリ書き換え、分類、固有表現抽出はしない。
 
@@ -383,7 +383,7 @@ PipesHub は push の正規化バイトをドキュメントストレージに�
 
 ### Redis Streams
 
-ストリーム名は `record-events` である。PipesHub の Redis Streams 実装が使う話題名と同じである（`services/messaging/redis_streams/indexing_consumer.py` のレーン `record-events.N`）。レーン分割はしない。既定のブローカは Redis である（`services/messaging/config.py` の `MESSAGE_BROKER`）。消費者グループは `indexing` である。
+ストリーム名は `record-events` である。消費者グループは `indexing` である。`redis.lanes` の既定は 1 である。PipesHub は `FAIR_SCHEDULING_LANE_COUNT` の既定を 8 にする（`services/messaging/config.py` L670、`acc3095`）。同じ関数の説明は、1 のときレーンを作らず、公開パスはレーン導入前の1本のままだと書いている（L651-L652）。消費者も 1 以下ならレーン数を記録しない（`indexing_consumer.py` L474-L475）。こちらはワーカーが1つで、コネクタごとの公平性で止める仕組みが無い。だから閉じた既定は、そのレーン無しの経路である。`redis.lanes` を 2 以上にすると、PipesHub の `RedisLaneRouter` と同じく `record-events.N` へ書き、消費者は基の `record-events` も読む（`lanes/hash_router.py` L84-L104）。レコード id の SHA-256 でレーンを決める（`stable_lane`、同ファイル L15-L33）。
 
 メッセージは PipesHub の生産者と同じ封筒である（`redis_streams/producer.py`）。Redis のフィールドは `eventType`、`payload`、`timestamp` である。`payload` は JSON 文字列である。
 
@@ -416,25 +416,33 @@ keyword:
   sudachi:
     mode: C
     normalize: true
+  char_bigram:
+    nfkc: true
+    casefold: false
+    drop_space: true
+    drop_control: true
+    drop_punct: false
 fusion:
   method: rrf
   k: 60
 bm25:
   k1: 1.2
   b: 0.75
+redis:
+  lanes: 1
 ```
 
-モデルのライセンスは Apache-2.0 である（モデルカード）。`device` は `cpu` または `cuda` だけである。文書には `検索文書: `、クエリには `検索クエリ: ` を付ける。これはモデルカードの暫定であり、末尾の未決に残す。
+モデルのライセンスは Apache-2.0 である（モデルカード）。`device` は `cpu` または `cuda` だけである。文書には `検索文書: `、クエリには `検索クエリ: ` を付ける。モデルカード（`cl-nagoya/ruri-v3-310m` の README、2026-11-17 取得）がその2つを分けている。PipesHub の埋め込みサーバーは query と passage に同じ文字列を渡す（`japanese_support.md`）。こちらはカードに合わせる。接頭辞はフィンガープリントに入る。
 
 ## キーワード
 
 Sudachi は分割モード C である。`normalize: true` のとき、語の表記は `normalized_form` である。false のとき `surface` である。品詞では落とさない。空文字の正規化形は捨てる。
 
-文字バイグラムは未決の暫定である。NFKC、小文字化、空白と制御文字を除いた符号点の隣り合う2点である。1点しか無ければ語は無い。
+文字バイグラムの既定は、NFKC のあと空白と制御文字（Unicode カテゴリ C）を除き、隣り合う符号点を語にする。大小は NFKC のまま残す。句読点は残す。1点しか無ければ語は無い。`keyword.char_bigram.casefold` と `drop_punct` はベンチマークが変えてよい。既定はどちらも false である。この5つの真偽はポスティングを変えるのでフィンガープリントに入る。変えたあとは `POST /api/v1/index/reindex` が要る。NFKC は全角ラテンを ASCII にするので、「ＡＢ」は「AB」になる。これは小文字化ではない。
 
-文書の埋め込みには `検索文書: ` を、クエリには `検索クエリ: ` を付ける。モデルカードの暫定である。
+文書の埋め込みには `検索文書: ` を、クエリには `検索クエリ: ` を付ける。
 
-BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定である。転置索引は語と文書頻度と tf だけを持つ。
+BM25 は Okapi である。`bm25.k1` の既定は 1.2、`bm25.b` の既定は 0.75 である。Okapi の標準であり、fastembed `Qdrant/bm25` の既定でもある（`fe_bm25_37c7.py`）。得点だけが変わり、語の集合は変わらない。フィンガープリントには入れない。ベンチマークの調整候補である。転置索引は語と文書頻度と tf だけを持つ。
 
 問い合わせも同じトークナイザにかける。トークナイザごとに順位リストを1本作る。密ベクトルの順位リストを加え、RRF で融合する。
 
@@ -498,6 +506,8 @@ BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定�
 - dense とキーワードの RRF の k は 60 である。PipesHub が Qdrant に渡すハイブリッドは k を付けない。Qdrant v1.15 の既定は 2 で、式は `1/(position+2)`、position は 0 始まりである（`fusion_methods.md`）。k=60 は後段のコレクション間マージと、OpenSearch と Redis の値である。承認済み要件がこちらの融合に 60 を指定しているので、既定は 60 のままにする。対照は `fusion.k: 2` である。
 - 候補の深さは PipesHub と同じ `limit * 2` である。融合の場所は違う。PipesHub は Qdrant サーバの Prefetch 2 本（dense と sparse）で融合する。こちらは密を Qdrant から、キーワードを Postgres の BM25 から取り、アプリ側で足す。キーワード枝は Sudachi と文字バイグラムの 2 本である。
 - HTTP の `application/blocks` も Content-Type として許す。PipesHub の検査は `application/json` だけである。
+- Redis のレーン既定は 1 である。PipesHub の環境変数既定は 8 である。1 は PipesHub が「レーン無し」と書く経路である。
+- 表の行は方針 B のまま1点にする。PipesHub は方針 C で行をまとめる。
 
 ## ノートで閉じた判断
 
@@ -507,12 +517,12 @@ BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定�
 
 `fusion_methods.md` が次を決めている。PipesHub が使う融合は RRF だけである。`Fusion.DBSF`、重み付き和、方式の切り替えは無い。`qdrant/utils.py` L304-L309（`acc3095`、`7aff0de` も同じ行）は `Fusion.RRF` を固定し、k を渡さない。`FusionMethod` の `ARITHMETIC_MEAN` と `HARMONIC_MEAN` は参照が無い。索引観察のパスも、同じノート群の `ingest_inspection_ui.md` が画面の呼ぶ先を書いているので、上のパスで閉じた。
 
+ruri-v3 の接頭辞はモデルカードで閉じた。文書は `検索文書: `、クエリは `検索クエリ: ` である（`cl-nagoya/ruri-v3-310m` の README、2026-11-17 取得）。
+
+BM25 の `k1` 1.2 と `b` 0.75、文字バイグラムの NFKC・空白と制御文字の除去・句読点と大小の維持は、文書化した既定として閉じた。設定キーは `bm25.k1`、`bm25.b`、`keyword.char_bigram` である。k1 と b と `casefold` と `drop_punct` はベンチマークの調整候補である。
+
+Redis のレーンは 1 で閉じた。根拠は上の Streams の節である。表の行は方針 B の1ブロック1点で閉じた。`rag_requirements.md` が方針 B を名指ししている。PipesHub の `_group_table_row_documents` は方針 C で、連続する行を1点にまとめる（`modules/transformers/vectorstore.py` L806-L812、呼び出し L3011、`acc3095`）。それを採るとチャンクの境界が要件と違う。LLM の `table_summary` で本文を上書きしない。
+
 ## 未決
 
-ノートが決めていないものだけを残す。仮はベンチマークが確かめるための暫定であり、要件ではない。1 の索引観察パスと 5 の融合方式は閉じた。番号は残したままである。
-
-2. 文字バイグラムの前処理。要件はトークナイザ名だけである。`rag_sparse_compare.md` の表 A は NFKC と小文字化のあとでバイグラムを切っているが、それは比較記事の条件である。暫定は NFKC、小文字化、空白と制御文字を除いた隣接受符点である。選択肢は、生の符号点、空白だけ除く、Sudachi の語の中だけ、である。変わると再索引が要る。
-3. BM25 の `k1` と `b`。要件に無い。暫定は Okapi の標準であり fastembed `Qdrant/bm25` の既定でもある 1.2 と 0.75 である（`undecided_components.md` の項目 12、`fe_bm25_37c7.py`）。フィンガープリントには入れない。ベンチマークが確かめる。
-4. ruri-v3 の接頭辞。モデルカード（`cl-nagoya/ruri-v3-310m` の README、2026-11-17 取得）は、検索クエリに `検索クエリ: `、文書に `検索文書: ` を付ける。暫定はカードどおり文書とクエリで分ける。PipesHub の埋め込みサーバーは query と passage に同じ文字列を渡す（`japanese_support.md`）。ベンチマークが確かめる。
-6. Redis のレーン数。PipesHub の既定は 8（`undecided_components.md` の項目 24）。要件は Streams とだけ書いている。暫定はレーン 1 である。
-7. 表を方針 C のように行グループにするか。要件は方針 B だけを名指ししている。暫定は行をテキストとして方針 B で切る。LLM による `table_summary` の上書きはしない。
+残っていない。

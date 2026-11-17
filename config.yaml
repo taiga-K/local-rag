@@ -7,9 +7,17 @@ keyword:
   sudachi:
     mode: C
     normalize: true
+  char_bigram:
+    nfkc: true
+    casefold: false
+    drop_space: true
+    drop_control: true
+    drop_punct: false
 fusion:
   method: rrf
   k: 60
 bm25:
   k1: 1.2
   b: 0.75
+redis:
+  lanes: 1

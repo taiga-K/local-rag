@@ -10,6 +10,7 @@ import pytest
 from kbindex.api import admit, parse_retrieve
 from kbindex.config import Settings, load_settings
 from kbindex.contract import MAX_BODY_BYTES, PushRefusal
+from kbindex.stream import publish_stream, stream_names
 
 
 def _settings(**over) -> Settings:
@@ -84,6 +85,36 @@ def test_retrieve_bounds():
     assert day["bounds"]["modified_before"].tzinfo is not None
 
 
+def test_tuning_defaults_are_config(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "bm25:\n  k1: 1.5\n  b: 0.4\nkeyword:\n  char_bigram:\n    casefold: true\n    drop_punct: true\nredis:\n  lanes: 8\n",
+        encoding="utf-8",
+    )
+    loaded = load_settings(str(path))
+    assert (loaded.bm25_k1, loaded.bm25_b, loaded.bigram_casefold, loaded.bigram_drop_punct, loaded.redis_lanes) == (
+        1.5,
+        0.4,
+        True,
+        True,
+        8,
+    )
+    path.write_text("redis:\n  lanes: 0\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        load_settings(str(path))
+
+
+def test_lane_names_follow_pipeshub():
+    assert stream_names(1) == ("record-events",)
+    assert publish_stream("rec", 1) == "record-events"
+    names = stream_names(8)
+    assert names[0] == "record-events"
+    assert names[1:] == tuple(f"record-events.{lane}" for lane in range(8))
+    placed = publish_stream("same-record", 8)
+    assert placed == publish_stream("same-record", 8)
+    assert placed in names[1:]
+
+
 def test_fusion_k_is_config(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("fusion:\n  method: rrf\n  k: 2\n", encoding="utf-8")
@@ -115,5 +146,12 @@ def test_fingerprint_ignores_device_and_bm25():
         hidden_size=768, max_seq_length=8192
     )
     assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) != _settings(fusion_method="other").index_fingerprint(
+        hidden_size=768, max_seq_length=8192
+    )
+    punct = _settings(bigram_drop_punct=True)
+    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) != punct.index_fingerprint(
+        hidden_size=768, max_seq_length=8192
+    )
+    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) == _settings(redis_lanes=8, bm25_b=0.5).index_fingerprint(
         hidden_size=768, max_seq_length=8192
     )

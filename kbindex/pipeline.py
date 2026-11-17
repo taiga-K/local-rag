@@ -76,7 +76,14 @@ def _terms(settings: Settings, name: str, text: str) -> list[str]:
     if name == "sudachi":
         return sudachi_terms(text, mode=settings.sudachi_mode, normalize=settings.sudachi_normalize)
     if name == "char_bigram":
-        return char_bigrams(text)
+        return char_bigrams(
+            text,
+            nfkc=settings.bigram_nfkc,
+            casefold=settings.bigram_casefold,
+            drop_space=settings.bigram_drop_space,
+            drop_control=settings.bigram_drop_control,
+            drop_punct=settings.bigram_drop_punct,
+        )
     return []
 
 

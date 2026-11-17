@@ -12,6 +12,7 @@ integration-tests/retrieval/test_search_quality.py, which calls /api/v1/search.
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 import uuid
 
@@ -97,3 +98,32 @@ def test_harness_push_and_retrieve_shape():
         "filters": {"kb": ["missingkb"]},
     })
     assert empty == {"chunks": [], "incomplete": False}
+    legal = "A._~:z-1"
+    status, pushed = call("POST", f"/api/v1/kb/{kb}/records", {
+        "recordName": "記号",
+        "mimeType": "application/blocks",
+        "externalRecordId": legal,
+        "version": 1,
+        "blocksFormat": 1,
+        "blocks": {"blocks": [{"index": 0, "type": "text", "data": "外部識別子は記号を含む。"}]},
+    })
+    assert status == 201 and pushed["externalRecordId"] == legal
+    request = urllib.request.Request(
+        API + f"/api/v1/kb/{kb}/records",
+        data=json.dumps({
+            "recordName": "拒否",
+            "mimeType": "application/blocks",
+            "externalRecordId": "-lead",
+            "version": 1,
+            "blocksFormat": 1,
+            "blocks": {"blocks": [{"index": 0, "type": "text", "data": "先頭が記号"}]},
+        }).encode(),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(request, timeout=30)
+        raise AssertionError("a leading hyphen must be refused")
+    except urllib.error.HTTPError as exc:
+        body = json.loads(exc.read())
+        assert exc.code == 400 and body["error"]["reason"] == "ENVELOPE_INVALID"

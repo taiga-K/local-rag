@@ -1,9 +1,16 @@
-"""Redis stream `record-events`. The envelope matches the PipesHub producer."""
+"""Redis stream `record-events`. The envelope matches the PipesHub producer.
+
+One lane publishes to that stream. More than one lane publishes to
+`record-events.N` and the consumer also drains the base stream, which is
+what PipesHub does when `FAIR_SCHEDULING_LANE_COUNT` is above 1
+(`lanes/hash_router.py` `lane_topics`).
+"""
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from hashlib import sha256
 
 import redis
 
@@ -11,12 +18,30 @@ STREAM = "record-events"
 GROUP = "indexing"
 
 
-def ensure_group(client: redis.Redis) -> None:
-    try:
-        client.xgroup_create(STREAM, GROUP, id="0", mkstream=True)
-    except redis.ResponseError as exc:
-        if "BUSYGROUP" not in str(exc):
-            raise
+def stream_names(lanes: int) -> tuple[str, ...]:
+    """Streams the consumer reads. The base name stays first so older events drain."""
+    count = max(1, lanes)
+    if count == 1:
+        return (STREAM,)
+    return (STREAM,) + tuple(f"{STREAM}.{lane}" for lane in range(count))
+
+
+def publish_stream(record_id: str, lanes: int) -> str:
+    """Stable lane for one record. SHA-256, same idea as PipesHub `stable_lane`."""
+    count = max(1, lanes)
+    if count == 1:
+        return STREAM
+    lane = int.from_bytes(sha256(record_id.encode("utf-8")).digest()[:8], "big") % count
+    return f"{STREAM}.{lane}"
+
+
+def ensure_group(client: redis.Redis, lanes: int = 1) -> None:
+    for name in stream_names(lanes):
+        try:
+            client.xgroup_create(name, GROUP, id="0", mkstream=True)
+        except redis.ResponseError as exc:
+            if "BUSYGROUP" not in str(exc):
+                raise
 
 
 def publish(
@@ -28,6 +53,7 @@ def publish(
     external_record_id: str,
     version: int,
     content_rev: str,
+    lanes: int = 1,
 ) -> None:
     payload = json.dumps(
         {
@@ -40,7 +66,7 @@ def publish(
         ensure_ascii=False,
     )
     client.xadd(
-        STREAM,
+        publish_stream(record_id, lanes),
         {
             "eventType": event_type,
             "payload": payload,

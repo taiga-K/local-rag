@@ -92,6 +92,10 @@ def test_char_bigram_provisional():
     assert char_bigrams("あいう") == ["あい", "いう"]
     assert char_bigrams("ＡＢ") == ["AB"]
     assert char_bigrams("a\x00b") == ["ab"]
+    assert char_bigrams("Ab") == ["Ab"]
+    assert char_bigrams("Ab", casefold=True) == ["ab"]
+    assert char_bigrams("a.b", drop_punct=True) == ["ab"]
+    assert char_bigrams("a.b") == ["a.", ".b"]
 
 
 def test_bm25_prefers_the_document_that_contains_the_term():

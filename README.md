@@ -48,6 +48,24 @@ curl -s -X POST http://127.0.0.1:43123/api/v1/retrieve \
 
 ## ベンチマークの入口
 
+スタックを上げて JSONL を入れるコマンドは1つである。
+
+```bash
+scripts/load-corpus.sh samples/corpus.jsonl bench
+```
+
+`samples/corpus.jsonl` の `externalRecordId` は `doc.weather_1` と `A._~:z-1` である。後者は `^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$` に入る。先頭が `-` の id は 400 `ENVELOPE_INVALID` である。
+
+ハーネスはそのあと次のボディで検索する。
+
+```bash
+curl -s -X POST http://127.0.0.1:43123/api/v1/retrieve \
+  -H 'content-type: application/json' \
+  -d '{"query":"東京の天気","limit":10,"rewriteQuery":false,"maxChunksPerRecord":1,"filters":{"kb":["bench"]}}'
+```
+
+完了を待つときは `GET /api/v1/kb/bench/indexing/counts` の `QUEUED` と `IN_PROGRESS` が 0 になるまで見る。各チャンクの `record.recordId` は push した `externalRecordId` である。
+
 ハーネスは次の 2 つを使う。
 
 1. `POST /api/v1/kb/{kb_id}/records`。`mimeType` は `application/blocks`、`blocksFormat` は 1、テキストブロックを置く。`externalRecordId` は `^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$` である。
@@ -78,4 +96,6 @@ pytest
 
 `pytest` は単体テストだけを実行する。`INTEGRATION=1 pytest` は compose の Postgres、Redis、Qdrant を使う。`SLOW=1 pytest` は `ruri-v3-310m` を 1 回ロードする。
 
-未決の項目は `DESIGN.md` の「未決」にある。テストの割り当ては `TEST_DESIGN.md` にある。依存の版と SPDX は `THIRD_PARTY.md` にある。
+`DESIGN.md` の未決は残っていない。テストの割り当ては `TEST_DESIGN.md` にある。依存の版と SPDX は `THIRD_PARTY.md` にある。
+
+文字バイグラムの既定は NFKC、空白と制御文字を除く、大小と句読点は残す。`bm25.k1` は 1.2、`bm25.b` は 0.75 である。`keyword.char_bigram.casefold`、`drop_punct`、`bm25.k1`、`bm25.b` はベンチマークの調整候補である。`redis.lanes` の既定は 1 である。PipesHub の既定 8 にするときはこの値を 8 にして API とワーカーを起動し直す。

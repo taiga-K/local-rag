@@ -232,7 +232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.embedder = load_embedder(settings.backend, settings.model, settings.device)
         app.state.engine = Engine(settings, app.state.db, app.state.vectors, app.state.embedder)
         app.state.redis.ping()
-        ensure_group(app.state.redis)
+        ensure_group(app.state.redis, settings.redis_lanes)
         app.state.engine.ensure_generation()
         _republish_recovered(app)
 
@@ -341,6 +341,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 external_record_id=external_record_id,
                 version=int(snapshot["version"]),
                 content_rev=snapshot["content_rev"] or "",
+                lanes=app.state.settings.redis_lanes,
             )
         except redis.RedisError:
             _restore_record(app, snapshot)
@@ -385,6 +386,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 external_record_id=external_record_id,
                 version=int(row["version"]),
                 content_rev=row["content_rev"] or "",
+                lanes=app.state.settings.redis_lanes,
             )
         except redis.RedisError:
             with app.state.db.connect() as conn:
@@ -449,6 +451,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     external_record_id=row["external_record_id"],
                     version=int(row["version"]),
                     content_rev=row["content_rev"] or "",
+                    lanes=app.state.settings.redis_lanes,
                 )
         except redis.RedisError:
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
@@ -646,6 +649,7 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
                 external_record_id=envelope.externalRecordId,
                 version=envelope.version,
                 content_rev=prepared.content_rev,
+                lanes=app.state.settings.redis_lanes,
             )
         except redis.RedisError:
             _compensate_push(app, previous, old_raw, old_stored, rid, kb_id)
@@ -933,6 +937,7 @@ def _republish_recovered(app) -> None:
             external_record_id=row["external_record_id"],
             version=int(row["version"]),
             content_rev=row["content_rev"] or "",
+            lanes=app.state.settings.redis_lanes,
         )
 
 

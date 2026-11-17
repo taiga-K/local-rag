@@ -34,11 +34,31 @@ def sudachi_terms(text: str, *, mode: str = "C", normalize: bool = True) -> list
     return out
 
 
-def char_bigrams(text: str) -> list[str]:
-    """Provisional rule: NFKC, drop space and control, then adjacent code points."""
+def char_bigrams(
+    text: str,
+    *,
+    nfkc: bool = True,
+    casefold: bool = False,
+    drop_space: bool = True,
+    drop_control: bool = True,
+    drop_punct: bool = False,
+) -> list[str]:
+    """Adjacent code points after the configured cleanup.
+
+    The defaults are NFKC, keep case, drop space and control, keep punctuation.
+    NFKC already folds fullwidth Latin, so 「ＡＢ」 becomes 「AB」.
+    """
+    data = unicodedata.normalize("NFKC", text) if nfkc else text
+    if casefold:
+        data = data.casefold()
     cleaned = []
-    for char in unicodedata.normalize("NFKC", text):
-        if char.isspace() or unicodedata.category(char).startswith("C"):
+    for char in data:
+        category = unicodedata.category(char)
+        if drop_space and char.isspace():
+            continue
+        if drop_control and category.startswith("C"):
+            continue
+        if drop_punct and category.startswith("P"):
             continue
         cleaned.append(char)
     return [cleaned[i] + cleaned[i + 1] for i in range(len(cleaned) - 1)]

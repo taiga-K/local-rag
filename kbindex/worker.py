@@ -12,7 +12,7 @@ from kbindex.db import Database, rebuild_bm25, record_id_for, record_row, recove
 from kbindex.embed import load_embedder
 from kbindex.pipeline import Engine
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
-from kbindex.stream import GROUP, STREAM, ensure_group, publish, read_event
+from kbindex.stream import GROUP, ensure_group, publish, read_event, stream_names
 
 CONSUMER = "worker"
 
@@ -33,20 +33,27 @@ def _run() -> None:
     vectors = Vectors(settings.qdrant_url)
     embedder = load_embedder(settings.backend, settings.model, settings.device)
     engine = Engine(settings, db, vectors, embedder)
-    ensure_group(client)
+    ensure_group(client, settings.redis_lanes)
     engine.ensure_generation()
-    _recover(db, client)
+    _recover(db, client, settings.redis_lanes)
+    streams = stream_names(settings.redis_lanes)
     while True:
         for cursor in ("0", ">"):
-            found = client.xreadgroup(GROUP, CONSUMER, {STREAM: cursor}, count=8, block=2000 if cursor == ">" else 1)
+            found = client.xreadgroup(
+                GROUP,
+                CONSUMER,
+                {name: cursor for name in streams},
+                count=8,
+                block=2000 if cursor == ">" else 1,
+            )
             if not found:
                 continue
-            for _stream, messages in found:
+            for stream_name, messages in found:
                 for message_id, fields in messages:
-                    _handle(engine, db, client, message_id, fields)
+                    _handle(engine, db, client, stream_name, message_id, fields)
 
 
-def _recover(db: Database, client) -> None:
+def _recover(db: Database, client, lanes: int) -> None:
     with db.connect() as conn:
         rows = recover_in_progress(conn)
         conn.commit()
@@ -59,20 +66,21 @@ def _recover(db: Database, client) -> None:
             external_record_id=row["external_record_id"],
             version=int(row["version"]),
             content_rev=row["content_rev"] or "",
+            lanes=lanes,
         )
 
 
-def _handle(engine: Engine, db: Database, client, message_id: str, fields: dict) -> None:
+def _handle(engine: Engine, db: Database, client, stream_name: str, message_id: str, fields: dict) -> None:
     event = read_event(fields)
     if event["eventType"] == "deleteRecord":
         _delete(engine, db, event)
-        client.xack(STREAM, GROUP, message_id)
+        client.xack(stream_name, GROUP, message_id)
         return
     if not event["kbId"] or not event["externalRecordId"]:
-        client.xack(STREAM, GROUP, message_id)
+        client.xack(stream_name, GROUP, message_id)
         return
     if engine.fingerprint_mismatch():
-        client.xack(STREAM, GROUP, message_id)
+        client.xack(stream_name, GROUP, message_id)
         return
     with db.connect() as conn:
         row = conn.execute(
@@ -81,10 +89,10 @@ def _handle(engine: Engine, db: Database, client, message_id: str, fields: dict)
         ).fetchone()
     if row is None:
         _delete_points(engine, db, event["recordId"])
-        client.xack(STREAM, GROUP, message_id)
+        client.xack(stream_name, GROUP, message_id)
         return
     if event["version"] < int(row["version"]):
-        client.xack(STREAM, GROUP, message_id)
+        client.xack(stream_name, GROUP, message_id)
         return
     try:
         engine.index_record(
@@ -103,7 +111,7 @@ def _handle(engine: Engine, db: Database, client, message_id: str, fields: dict)
             event["contentRev"] or row["content_rev"],
             "QDRANT_UNAVAILABLE",
         )
-    client.xack(STREAM, GROUP, message_id)
+    client.xack(stream_name, GROUP, message_id)
 
 
 def _delete(engine: Engine, db: Database, event: dict) -> None:

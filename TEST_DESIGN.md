@@ -251,18 +251,22 @@ PipesHub に Sudachi のテストは無い。RRF の定数と式の参照は `ba
 
 PipesHub の push 統合は `backend/python/tests/integration/graph_db/test_kb_push_real_backends.py`（28）と `test_kb_push_concurrency_real_backends.py` の `test_race_two_services` である。retrieve の境界は `backend/python/tests/unit/api/routes/test_retrieve.py`（18、サービスは MagicMock）。実 Qdrant のハイブリッドは `tests/integration/vector_db/test_qdrant_integration.py` の `test_hybrid_sparse_dense_query` が1本だけで、対象は `/api/v1/search` ではない。状態遷移の穴は `test_viewpoints.md` の穴 7 である。依存が落ちたときの PipesHub テストファイルは特定できない。再索引に近いのは `integration-tests/resilience/test_vector_store_rebuild.py` である。
 
-| テスト | 技法 | 観察 | PipesHub |
+12 本ある。原則の名前は同値分割、境界値分析、状態遷移、エラー網羅の4つである。デシジョンテーブルは version の状態遷移としてこの表では状態遷移に入れる。
+
+| テスト | 原則 | 観察 | PipesHub または穴 |
 | --- | --- | --- | --- |
+| `test_push_index_retrieve_and_debug` | 同値分割 | push した日本語が retrieve の `chunks[0].text` にあり、debug の `rrf` は降順 | 穴 1、穴 2、穴 4。`integration-tests/retrieval/test_search_quality.py` は `/api/v1/search` であり `/retrieve` ではない |
+| `test_harness_push_and_retrieve_shape` | 同値分割、境界値分析、エラー網羅 | ボディは `{query, limit, rewriteQuery:false, maxChunksPerRecord:1, filters:{kb:[KB]}}`。`record.recordId` は `externalRecordId`。未知 kb は `chunks: []`。`A._~:z-1` は 201。先頭が `-` は 400 `ENVELOPE_INVALID` | 穴 1。近いファイルは `test_search_quality.py`。id の形は `push/test_contract.py` |
 | `test_push_dto_rejections` | 同値分割、エラー網羅 | 未知キー 400 `ENVELOPE_INVALID`、`index` が文字列 422 `BLOCKS_INVALID`、`recordName` 欠落 400、`blocks` 欠落 422、ブロック型 `paragraph` とグループ型 `sheet` は 422、空オブジェクト 400、1 MiB+1 の text は 422。`error.code` はステータスに対応する | `push/test_contract.py`、`push/test_router.py`、`push/test_structure.py` |
-| `test_version_semantics_delete_repush` | デシジョンテーブル、状態遷移 | より大きい version は 200 `updated`。同じ version と同じ本体は 200 `unchanged`。同じ version で本文が違うと 409 `VERSION_CONFLICT`。より小さいと 409 `STALE_VERSION`。`currentVersion` は保存値。削除のあと GET は 404。同じ id の再 push は 201 で、新しい本文が検索に出る | `test_kb_push_real_backends.py`。削除 API は無く、近いのは `test_kb_delete_real_backends.py` |
+| `test_version_semantics_delete_repush` | 状態遷移、エラー網羅 | より大きい version は 200 `updated`。同じ version と同じ本体は 200 `unchanged`。同じ version で本文が違うと 409 `VERSION_CONFLICT`。より小さいと 409 `STALE_VERSION`。`currentVersion` は保存値。削除のあと GET は 404。同じ id の再 push は 201 で、新しい本文が検索に出る | `test_kb_push_real_backends.py`。削除 API は無く、近いのは `test_kb_delete_real_backends.py` |
 | `test_concurrent_push_same_key` | 状態遷移 | 同じ鍵への同時 push は 201、200、409 だけ。最終行は1つ。version は成功した要求の最大 | `test_kb_push_concurrency_real_backends.py` の `test_race_two_services` |
-| `test_indexing_status_and_qdrant` | 状態遷移、エラー網羅 | `COMPLETED`、空文書は `EMPTY`、件数の5キー、`IN_PROGRESS` の reprocess は 409、Qdrant 停止中の索引は `FAILED` と `QDRANT_UNAVAILABLE`、retrieve は 503、復帰後の reprocess は `COMPLETED` | 穴 7。再実行は `POST /api/v1/records/{id}/reindex`。失敗レコードの再索引は `integration-tests/resilience/test_reindex_failed_records.py`。Qdrant 停止の対応ファイルは無い |
-| `test_redis_unavailable_then_push` | エラー網羅 | Redis 停止中の push は 503 `REDIS_UNAVAILABLE`。行は残らない。復帰後の同じ push は 201 | 対応する PipesHub テストは無い。契約は `DESIGN.md` の 503 |
-| `test_postgres_unavailable_then_push` | エラー網羅 | Postgres 停止中の push は 503 `POSTGRES_UNAVAILABLE`。復帰後にその id は 404 で、再 push は 201 | 対応する PipesHub テストは無い |
-| `test_retrieve_boundaries` | 境界値分析、エラー網羅 | `limit` 0 と 11 は 422 `LIMIT_OUT_OF_RANGE`。1 は1件。10 は10件以下。空の query は 400 `INVALID_QUERY`。未知の `filters.kb` は `chunks: []`。未知のフィルタキーは 400 `INVALID_FILTER`。`maxChunksPerRecord: 1` はレコードあたり1件 | `tests/unit/api/routes/test_retrieve.py`。穴 1（retrieve の e2e が無い） |
-| `test_debug_japanese_bm25_and_dense` | 同値分割 | 索引語を含む日本語の問いでは、そのチャンクの `sudachi` か `char_bigram` が null でない。索引語を含まない日本語の問いでは、返ったチャンクのキーワード脚は null で `dense` がある | `test_qdrant_integration.py` の `test_hybrid_sparse_dense_query`。穴 4。デバッグ API に対応する PipesHub テストは無い |
-| `test_index_config_mismatch_then_reindex` | 状態遷移 | 保存した指紋を壊すと検索は 400 `INDEX_CONFIG_MISMATCH`。メッセージに `POST /api/v1/index/reindex` がある。そのコマンドのあと 200 | `integration-tests/resilience/test_vector_store_rebuild.py` |
-| `test_inspection_paths` | 同値分割 | `GET /api/v1/records/{id}` と `GET /api/v1/knowledgeBase/record/{id}` の `record.indexingStatus` が一致する。`GET /api/v1/connectors/{kb}/stats` の `data.stats.total` は `indexingStatus` の合計と一致する。未知のコネクタは 404 | `integration-tests/response-validation/connector/integration_test_connector_sync_lifecycle.py` の `GET /api/v1/connectors/{connectorId}/stats`。記録は `integration-tests/response-validation/knowledgebase/integration_test_knowledgebase_records_crud.py` の `GET /api/v1/knowledgeBase/record/{id}` |
+| `test_indexing_status_and_qdrant` | 状態遷移、エラー網羅 | `COMPLETED`、空文書は `EMPTY`、件数の5キー、`IN_PROGRESS` の reprocess は 409、Qdrant 停止中の索引は `FAILED` と `QDRANT_UNAVAILABLE`、retrieve は 503、復帰後の reprocess は `COMPLETED` | 穴 7。`integration-tests/resilience/test_reindex_failed_records.py`。Qdrant 停止の対応ファイルは無い |
+| `test_redis_unavailable_then_push` | エラー網羅 | Redis 停止中の push は 503 `REDIS_UNAVAILABLE`。行は残らない。復帰後の同じ push は 201 | 対応する PipesHub テストは無い。`test_viewpoints.md` にこの停止は無い。契約は `DESIGN.md` の 503 |
+| `test_postgres_unavailable_then_push` | エラー網羅 | Postgres 停止中の push は 503 `POSTGRES_UNAVAILABLE`。復帰後にその id は 404 で、再 push は 201 | 対応する PipesHub テストは無い。穴の表にも無い |
+| `test_retrieve_boundaries` | 境界値分析、エラー網羅 | `limit` 0 と 11 は 422 `LIMIT_OUT_OF_RANGE`。1 は1件。10 は10件以下。空の query は 400 `INVALID_QUERY`。未知の `filters.kb` は `chunks: []`。未知のフィルタキーは 400 `INVALID_FILTER`。`maxChunksPerRecord: 1` はレコードあたり1件 | `tests/unit/api/routes/test_retrieve.py`。穴 1 |
+| `test_debug_japanese_bm25_and_dense` | 同値分割 | 索引語を含む日本語の問いでは、そのチャンクの `sudachi` か `char_bigram` が null でない。索引語を含まない日本語の問いでは、返ったチャンクのキーワード脚は null で `dense` がある | `test_qdrant_integration.py` の `test_hybrid_sparse_dense_query`。穴 4 |
+| `test_index_config_mismatch_then_reindex` | 状態遷移、エラー網羅 | 保存した指紋を壊すと検索は 400 `INDEX_CONFIG_MISMATCH`。メッセージに `POST /api/v1/index/reindex` がある。そのコマンドのあと 200 | `integration-tests/resilience/test_vector_store_rebuild.py` |
+| `test_inspection_paths` | 同値分割、エラー網羅 | `GET /api/v1/records/{id}` と `GET /api/v1/knowledgeBase/record/{id}` の `record.indexingStatus` が一致する。`GET /api/v1/connectors/{kb}/stats` の `data.stats.total` は `indexingStatus` の合計と一致する。未知のコネクタは 404 | `integration_test_connector_sync_lifecycle.py` の stats。`integration_test_knowledgebase_records_crud.py` の `GET /api/v1/knowledgeBase/record/{id}` |
 
 ## 計測
 
