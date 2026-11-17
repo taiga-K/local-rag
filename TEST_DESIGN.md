@@ -98,7 +98,7 @@ PipesHub の参照コミットは `7aff0de37be83beac220e801b83e303bd4018911` で
 
 技法は状態遷移である。
 
-モデルは `ProgressStatus` と、`local_repos.py` の件数、`kb-list-view.tsx` が理由を表示することである。PipesHub に同名の reprocess ルートは見つからなかった。ケースは `DESIGN.md` の遷移表が対象である。
+モデルは `ProgressStatus` と、`local_repos.py` の件数、`kb-list-view.tsx` が理由を表示すること、`tests/integration/graph_db/test_reindex_status_filter_real_backends.py` である。PipesHub の再実行ルートは `POST /api/v1/records/{record_id}/reindex` であり、`reprocess` という名前は無い。ケースは `DESIGN.md` の遷移表が対象である。外部 id の `reprocess` と `recordId` の `reindex` は同じ終状態になる。
 
 | 列 | 観察 |
 | --- | --- |
@@ -130,7 +130,7 @@ PipesHub の参照コミットは `7aff0de37be83beac220e801b83e303bd4018911` で
 
 技法は同値分割と境界値分析である。
 
-モデルは `backend/python/app/modules/transformers/vectorstore.py` の `_build_text_documents`（方針 B）と `_slice_on_character_boundaries` と `_split_to_token_ceiling` である。重なりを持つ `_chunk_oversized_text` は方針 A なので、結果がそれに一致したら失敗である。
+モデルは `backend/python/app/modules/transformers/vectorstore.py` の `_build_text_documents`（方針 B）と `_slice_on_character_boundaries` と `_split_to_token_ceiling`、および `tests/unit/modules/transformers/test_vectorstore_point_policy.py` と `test_vectorstore_token_sizing.py` である。重なりを持つ `_chunk_oversized_text` は方針 A なので、結果がそれに一致したら失敗である。
 
 | 類 | 観察 |
 | --- | --- |
@@ -165,7 +165,7 @@ PipesHub に Sudachi のテストは無い。RRF の定数と式の参照は `ba
 
 技法は同値分割と境界値分析とエラー網羅である。
 
-モデルは `backend/python/tests/unit/api/routes/test_retrieve.py` と `search.py` の `RetrieveQuery` である。権限で件数が減るケースは採用しない。
+モデルは `backend/python/tests/unit/api/routes/test_retrieve.py` と `search.py` の `RetrieveQuery` である。権限で件数が減るケースは採用しない。チャンク `id` は片が1つのとき `{recordId}:{blockIndex}` である。
 
 | ケース | 観察 |
 | --- | --- |
@@ -173,7 +173,9 @@ PipesHub に Sudachi のテストは無い。RRF の定数と式の参照は `ba
 | `limit` が 0、51 | 400 または 422。PipesHub は pydantic の範囲エラーである。ここは 422 に固定する |
 | `limit` が 1 と 50 | 件数がその数以下 |
 | `filters` に未知キー | 400 |
-| `filters.kbId` | その知識ベースのチャンクだけ |
+| `filters.kb` が id の配列 | その知識ベースのチャンクだけ |
+| `filters` の権限キー | 200。結果は絞られない |
+| `IN_PROGRESS` の GET | `embedDone` と `embedTotal` がある。`COMPLETED` の GET には無い |
 | 壊れた日付 | 400 |
 | `rewriteQuery: true` | 400 `REWRITE_DISABLED` |
 | ヒット無し | 200 `chunks: []` |

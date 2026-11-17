@@ -170,7 +170,7 @@ Postgres へ書けなければ 503 `POSTGRES_UNAVAILABLE` で、行は残さな�
 
 ボディは `{ "schemaId": "notes", "properties": [ { "name": "lang", "type": "string" } ] }` である。`type` は `string`、`integer`、`number`、`boolean`、`string_list` だけである。未知キーは 400 である。登録は置換である。
 
-PipesHub の `PropertyDefinition` にある `filterable` や `semanticLabel` は保存しない。検索フィルタは日付と `kbId` だけだからである。これは逸脱である。
+PipesHub の `PropertyDefinition` にある `filterable` や `semanticLabel` は保存しない。検索で効くフィルタは日付と `filters.kb` だけだからである。これは逸脱である。
 
 ### 削除
 
@@ -196,6 +196,8 @@ PipesHub の `PropertyDefinition` にある `filterable` や `semanticLabel` は
 }
 ```
 
+`indexingStatus` が `IN_PROGRESS` のときだけ `embedDone` と `embedTotal` を付ける。PipesHub の知識ハブ行と同じ条件である（`knowledge_hub_service.py` の `_embed_progress`）。それ以外の状態ではこの2つを返さない。保存値が残っていても返さない。
+
 `GET /api/v1/kb/{kb_id}/indexing/counts`
 
 ```json
@@ -204,7 +206,9 @@ PipesHub の `PropertyDefinition` にある `filterable` や `semanticLabel` は
 
 `POST /api/v1/kb/{kb_id}/records/{external_record_id}/reprocess`
 
-`IN_PROGRESS` は 409 `IN_PROGRESS` である。それ以外の現状態は `QUEUED` にし、`failureReason` を空にし、`reprocess` を流して 202 を返す。無ければ 404 である。
+PipesHub に `reprocess` というルートは無い。GUI が呼ぶ再実行は `POST /api/v1/records/{record_id}/reindex` である（`connectors/api/router.py`）。同じ操作を、外部 id では上のパス、内部 `recordId` では `POST /api/v1/records/{record_id}/reindex` で受ける。ボディは空でよい。PipesHub の `depth` と `stages` は受け取っても無視する。分類と固有表現が無いからである。
+
+`IN_PROGRESS` は 409 `IN_PROGRESS` である。それ以外の現状態は `QUEUED` にし、`failureReason` を空にし、`reindexRecord` を流して 202 を返す。無ければ 404 である。
 
 `POST /api/v1/index/reindex` は世代を現在の設定で置き、Qdrant コレクションと BM25 を空にし、全文のあるレコードを `QUEUED` にして流す。202 と `{"fingerprint": "...", "queued": N}` を返す。
 
@@ -218,7 +222,7 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
 | --- | --- | --- |
 | `query` | 必須 | 1 文字以上。空白だけは 400 |
 | `limit` | 8 | 1 から 50 |
-| `filters` | `{}` | オブジェクト。使えるキーは `kbId` だけ。他のキーは 400 |
+| `filters` | `{}` | オブジェクト。PipesHub の公開キーは `apps`、`kb`、`recordGroups`、`records`、`recordsExact`、`entityFilters` である（`modules/retrieval/filter_schema.py`）。このシステムで結果を変えるのは `kb` だけである。値は知識ベース id の配列である。権限用のキー（`allowedApps` など）は受け取り、捨てる。それ以外の未知キーは 400 |
 | `createdAfter` `createdBefore` `modifiedAfter` `modifiedBefore` | なし | `YYYY-MM-DD` またはオフセット付き ISO 8601。両端を含む |
 | `maxChunksPerRecord` | なし | 1 から 50 |
 | `rewriteQuery` | false | true は 400 `REWRITE_DISABLED` |
@@ -233,7 +237,7 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
 {
   "chunks": [
     {
-      "id": "{recordId}:{blockIndex}:{piece}",
+      "id": "{recordId}:{blockIndex}",
       "text": "...",
       "score": 0.0327,
       "record": {
@@ -255,7 +259,7 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
 }
 ```
 
-`score` は RRF の値である。`connector` は知識ベース id である。PipesHub のコネクタ名に相当する枠だけ残す。ヒットが無ければ `chunks` は空で 200 である。`incomplete` は、キーワード側かベクトル側の一方が失敗したときに true である。両方失敗なら 503 である。
+`score` は RRF の値である。`connector` は知識ベース id である。PipesHub のコネクタ名に相当する枠だけ残す。`id` は PipesHub の `{virtualRecordId}:{blockIndex}` に合わせ、こちらでは `{recordId}:{blockIndex}` である（`search.py` の `_retrieve_chunks`）。同じブロックを複数片に割ったときは、2片目以降の `id` に `:{piece}` を足す。片が1つなら足さない。足さないと id が衝突する。ヒットが無ければ `chunks` は空で 200 である。`incomplete` は、キーワード側かベクトル側の一方が失敗したときに true である。両方失敗なら 503 である。
 
 `maxChunksPerRecord` があるとき、融合後の列からレコードごとにその件数まで残し、その後 `limit` で切る。
 
@@ -329,7 +333,7 @@ PipesHub は push の正規化バイトをドキュメントストレージに�
 
 ### Qdrant
 
-コレクション名は `chunks` である。PipesHub の `create_collection`（`services/vector_db/qdrant/qdrant.py`）に合わせる設定は次である。
+コレクション名は `records` である。PipesHub の単一コレクション戦略の既定名と同じである（`strategies/single.py`）。`create_collection`（`services/vector_db/qdrant/qdrant.py`）に合わせる設定は次である。
 
 - ベクトル名 `dense`
 - 距離 cosine（`CollectionConfig.distance_metric` の既定）
@@ -346,16 +350,11 @@ PipesHub は push の正規化バイトをドキュメントストレージに�
 
 ### Redis Streams
 
-ストリーム名は `record-events` である。PipesHub の Redis Streams 実装が使う話題名と同じである（`services/messaging/redis_streams/indexing_consumer.py` のレーン `record-events.N`）。レーン分割はしない。消費者グループは `indexing` である。
+ストリーム名は `record-events` である。PipesHub の Redis Streams 実装が使う話題名と同じである（`services/messaging/redis_streams/indexing_consumer.py` のレーン `record-events.N`）。レーン分割はしない。既定のブローカは Redis である（`services/messaging/config.py` の `MESSAGE_BROKER`）。消費者グループは `indexing` である。
 
-フィールドは文字列である。
+メッセージは PipesHub の生産者と同じ封筒である（`redis_streams/producer.py`）。Redis のフィールドは `eventType`、`payload`、`timestamp` である。`payload` は JSON 文字列である。
 
-- `eventType`: `newRecord`、`updateRecord`、`reprocess`、`deleteRecord`
-- `recordId`
-- `kbId`
-- `externalRecordId`
-- `version`
-- `contentRev`
+`eventType` は `newRecord`、`updateRecord`、`deleteRecord`、`reindexRecord` である。`reindexRecord` は PipesHub の再索引イベント名である（`config/constants/arangodb.py`）。`payload` は `recordId`、`kbId`、`externalRecordId`、`version`、`contentRev` を持つ。
 
 ワーカーはグループで読み、処理のあと XACK する。再配送は同じ終状態に寄る。`version` が行より古ければ ACK して捨てる。`deleteRecord` のあと行が無ければ、その `recordId` の点とポスティングを消して ACK する。
 
@@ -442,7 +441,9 @@ BM25 は Okapi である。`k1` と `b` は問い合わせ時の係数で、上�
 | Qdrant の作成引数 | `services/vector_db/qdrant/qdrant.py` `create_collection`、`services/vector_db/models.py` `CollectionConfig` |
 | retrieve の要求とチャンク | `api/routes/search.py` `RetrieveQuery`、`_retrieve_chunks` |
 | RRF の k=60 | `modules/retrieval/result_merging.py` |
-| ストリーム名 | `services/messaging/redis_streams/indexing_consumer.py` |
+| ストリーム名と封筒 | `services/messaging/redis_streams/indexing_consumer.py`、`redis_streams/producer.py`、`services/messaging/config.py` |
+| 再索引ルート | `connectors/api/router.py` の `POST /records/{record_id}/reindex` |
+| 状態別件数 | `connectors/api/router.py` の `GET /stats`、`services/graph_db/common/utils.py` の `build_connector_stats_response` |
 
 ## 逸脱
 
@@ -461,7 +462,7 @@ BM25 は Okapi である。`k1` と `b` は問い合わせ時の係数で、上�
 要件ノートがディスクに無く、次はソースからも依頼文からも一意に決まらない。実装は仮を置くが、仮は要件ではない。
 
 1. `rag_requirements.md`、`undecided_components.md`、`neo4j_vs_arangodb.md`、`embedding_switch_docs.md`、`japanese_support.md`、`rag_*_compare.md`、`kb_push_api.md`、`ingest_inspection_ui.md` の本文。アーカイブが届いたら、この文書と違う箇所はノートを優先して直す。
-2. 索引観察 API のパス。ノートが別のパスを指定しているかもしれない。仮は「索引の観察」の3本である。根拠は、画面が見ているフィールドが状態と理由と件数であること（`kb-list-view.tsx`、`local_repos.py`）。選択肢は、仮のパスを維持する、ノートのパスに変える、PipesHub の知識ベース一覧クエリに寄せる、である。
+2. 索引観察 API のパス。ソースで見つかった PipesHub のルートは、件数は `GET /api/v1/stats?connector_id=`（`stats.indexingStatus`）、1件の状態と理由は知識ハブの `indexingStatus` と `reason`、再実行は `POST /api/v1/records/{record_id}/reindex` である。`reprocess` というルートは無い。知識ハブの `include=counts` は節点種別の件数であり、状態別ではない。ノート `ingest_inspection_ui.md` は未読なので、画面がこの3本以外を呼んでいる可能性は残る。こちらは外部 id の GET と `indexing/counts` と `reprocess` を置き、再実行だけ PipesHub と同じ `/api/v1/records/{record_id}/reindex` も受ける。選択肢は、この仮を維持する、件数を `/api/v1/stats` に改名する、知識ハブのノード一覧を足す、である。
 3. 文字バイグラムの前処理。依頼文はトークナイザ名だけである。仮は NFKC のあと空白と制御文字を除いた隣接受符点である。選択肢は、生の符号点をすべて使う、空白だけ除く、Sudachi の語の中だけでバイグラムを切る、である。変わると再索引が要る。
 4. `normalize: true` の意味。仮は Sudachi の `normalized_form` である。選択肢は、それ、`dictionary_form`、Unicode NFKC を表層に掛ける、である。
 5. BM25 の `k1` と `b`。依頼文に無い。仮は 1.2 と 0.75 で、フィンガープリントには入れない。選択肢は、この仮、フィンガープリントに入れて再索引必須にする、である。係数は順位を変えるが転置索引の中身は変えない。
