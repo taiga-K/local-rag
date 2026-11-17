@@ -1,61 +1,72 @@
 # kbindex
 
-日本語の文書を索引し、質問に対するチャンクを HTTP で返す。回答文は作らない。LLM は使わない。
+日本語の文書を索引し、質問に近いチャンクを HTTP で返す。回答文は作らない。
 
-## 起動
+## 起動する
 
 ```bash
 docker compose up --build
 ```
 
-API は `http://127.0.0.1:43123` である。初回は `cl-nagoya/ruri-v3-310m` を Hugging Face から取る。Redis は 7.2（BSD-3-Clause）である。
+API は `http://127.0.0.1:43123` で待つ。初回起動は `cl-nagoya/ruri-v3-310m` を Hugging Face から取る。`HF_HOME` はボリューム `hf` に残る。Redis のイメージは 7.2 系で、ライセンスは BSD-3-Clause である。
 
-## サンプル
+モデルを取らずに動かすときは `config.test.yaml` を使う。`embedding.backend` は `fake` である。
 
 ```bash
-python -m kbindex.cli sync --kb demo --root samples --api http://127.0.0.1:43123
+docker compose up -d postgres redis qdrant
+DATABASE_URL=postgresql://kbindex:kbindex@127.0.0.1:54329/kbindex \
+REDIS_URL=redis://127.0.0.1:63799/0 \
+QDRANT_URL=http://127.0.0.1:46333 \
+DATA_DIR=/tmp/kbindex-records \
+KBINDEX_CONFIG=config.test.yaml \
+kbindex-api
 ```
 
-状態は `GET /api/v1/kb/demo/indexing/counts` で見る。`QUEUED` と `IN_PROGRESS` が 0 になってから検索する。
+別の端末で `kbindex-worker` を同じ環境変数で起動する。
+
+## サンプルを入れる
+
+`samples/` には次の文がある。
+
+- `weather.txt` は「東京都の今日の天気は晴れです。」
+- `library.md` は「市立図書館は水曜が休館です。」
+- `train.html` は「山手線は池袋で乗り換えます。」
+
+```bash
+kbindex-ingest sync --kb demo --root samples --api http://127.0.0.1:43123
+```
+
+`GET /api/v1/kb/demo/indexing/counts` の `QUEUED` と `IN_PROGRESS` が 0 になってから検索する。
 
 ```bash
 curl -s -X POST http://127.0.0.1:43123/api/v1/retrieve \
   -H 'content-type: application/json' \
-  -d '{"query":"東京の天気","limit":10}'
+  -d '{"query":"東京の天気","filters":{"kb":["demo"]}}'
 ```
 
-## ベンチマークハーネス
+`limit` の既定は 10、上限は 10 である。 `filters.kb` は知識ベース id の配列である。
 
-ハーネスは次の2つだけを使う。
+## ベンチマークの入口
 
-1. `POST /api/v1/kb/{kb_id}/records`  
-   `Content-Type` は `application/json`。ボディは `mimeType: "application/blocks"`、`blocksFormat: 1`、テキストブロック1個以上。`externalRecordId` は `^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$` である。
-2. `POST /api/v1/retrieve`  
-   `{"query":"...","limit":10,"rewriteQuery":false,"maxChunksPerRecord":1,"filters":{"kb":["demo"]}}`。  
-   各チャンクの `record.recordId` は、push 応答の `recordId` である。ヒットが無い知識ベースでは `{"chunks":[],"incomplete":false}` を返す。`filters.kb` 以外の知識ベースは混ぜない。`maxChunksPerRecord` はレコードごとに件数を切る。
+ハーネスが使う入口は次の 2 つだけである。
 
-まとめて入れるときは CLI を使う。
+1. `kbindex-ingest load --kb demo --jsonl corpus.jsonl --api http://127.0.0.1:43123`
+   1 行は `{"externalRecordId","recordName","text","version"}` である。同じ投入は `POST /api/v1/kb/{kb_id}/records` を 1 件ずつ呼んでもよい。
+2. `POST /api/v1/retrieve`
 
-```bash
-python -m kbindex.cli load --kb demo --jsonl corpus.jsonl --api http://127.0.0.1:43123
-```
+まとめて入れる HTTP は無い。完了は push の `indexingStatus` ではなく、`GET /api/v1/kb/{kb_id}/indexing/counts` の `QUEUED` と `IN_PROGRESS` が 0 になるまで待つ。
 
-1行は `{"externalRecordId","recordName","text","version"}` である。索引完了は counts の `QUEUED` と `IN_PROGRESS` が 0 になるまで待つ。
-
-削除は `DELETE /api/v1/kb/{kb_id}/records/{externalRecordId}` である。
+`scripts/measure.py` は `--run` を付け、API が応答するときだけ計測する。付けないときは終了コード 2 で、時間は出さない。
 
 ## テスト
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
+python -m venv .venv
+. .venv/bin/activate
 pip install -e '.[dev]'
 pytest
 ```
 
-`pytest -m integration` は compose が要る。`pytest -m slow` は実モデルを1本だけロードする。
+`pytest` は単体テストだけを実行する。`INTEGRATION=1 pytest` は compose の Postgres、Redis、Qdrant を使う。`SLOW=1 pytest` は `ruri-v3-310m` を 1 回ロードする。
 
-設計は `DESIGN.md`、テストの割り当ては `TEST_DESIGN.md` である。未決は `DESIGN.md` の「未決」にある。
-
-## 計測
-
-`scripts/measure.py` は起動中の API に対して索引時間と検索遅延を測る。数値は実行結果だけを出す。
+未決の項目は `DESIGN.md` の「未決」にある。テストの割り当ては `TEST_DESIGN.md` にある。依存の版と SPDX は `THIRD_PARTY.md` にある。
