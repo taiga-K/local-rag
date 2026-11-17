@@ -1,2 +1,5 @@
-
 .audit/
+.venv/
+__pycache__/
+*.pyc
+.kbindex-sync.json

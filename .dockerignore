@@ -1,0 +1,4 @@
+.venv
+.audit
+.git
+**/__pycache__
