@@ -29,9 +29,10 @@ curl -s -X POST http://127.0.0.1:43123/api/v1/retrieve \
 ハーネスは次の2つだけを使う。
 
 1. `POST /api/v1/kb/{kb_id}/records`  
-   `Content-Type` は `application/json`。ボディは `blocksFormat: 1` の `application/blocks` である。`externalRecordId` と `version` で上書きする。同じ version で同じ内容は 200 `unchanged` である。
+   `Content-Type` は `application/json`。ボディは `mimeType: "application/blocks"`、`blocksFormat: 1`、テキストブロック1個以上。`externalRecordId` は `^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$` である。
 2. `POST /api/v1/retrieve`  
-   `{"query":"...","limit":10,"filters":{"kb":["demo"]}}`。`limit` の既定は 10、上限は 10 である。
+   `{"query":"...","limit":10,"rewriteQuery":false,"maxChunksPerRecord":1,"filters":{"kb":["demo"]}}`。  
+   各チャンクの `record.recordId` は、push 応答の `recordId` である。ヒットが無い知識ベースでは `{"chunks":[],"incomplete":false}` を返す。`filters.kb` 以外の知識ベースは混ぜない。`maxChunksPerRecord` はレコードごとに件数を切る。
 
 まとめて入れるときは CLI を使う。
 

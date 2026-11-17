@@ -6,6 +6,7 @@ import json
 import statistics
 import time
 import urllib.request
+import uuid
 
 API = "http://127.0.0.1:43123"
 
@@ -22,12 +23,13 @@ def post(path: str, body: dict) -> tuple[int, dict, float]:
 def main() -> None:
     post("/api/v1/kb", {"id": "measure", "name": "measure"})
     docs = 8
+    run = uuid.uuid4().hex[:8]
     started = time.perf_counter()
     for i in range(docs):
         post("/api/v1/kb/measure/records", {
             "recordName": f"m{i}",
             "mimeType": "application/blocks",
-            "externalRecordId": f"m{i}",
+            "externalRecordId": f"m{run}{i}",
             "version": 1,
             "blocksFormat": 1,
             "blocks": {"blocks": [{"index": 0, "type": "text", "data": f"計測文書{i}。東京都の天気は晴れです。"}]},
@@ -40,7 +42,7 @@ def main() -> None:
             counts = json.loads(response.read().decode())
         if counts.get("QUEUED", 1) == 0 and counts.get("IN_PROGRESS", 1) == 0:
             break
-        time.sleep(1)
+        time.sleep(0.05)
     else:
         raise SystemExit(f"index did not finish: {counts}")
     indexed = time.perf_counter() - started
