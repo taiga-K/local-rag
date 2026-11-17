@@ -11,6 +11,7 @@ import json
 import os
 import time
 import urllib.request
+import uuid
 
 import pytest
 
@@ -33,8 +34,9 @@ def _json(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
 
 
 def test_push_index_retrieve_and_debug():
-    _json("POST", "/api/v1/kb", {"id": "it", "name": "it"})
-    status, created = _json("POST", "/api/v1/kb/it/records", {
+    kb = "it" + uuid.uuid4().hex[:8]
+    _json("POST", "/api/v1/kb", {"id": kb, "name": kb})
+    status, created = _json("POST", f"/api/v1/kb/{kb}/records", {
         "recordName": "天気",
         "mimeType": "application/blocks",
         "externalRecordId": "weather",
@@ -43,7 +45,7 @@ def test_push_index_retrieve_and_debug():
         "blocks": {"blocks": [{"index": 0, "type": "text", "data": "東京都の天気は晴れです。"}]},
     })
     assert status == 201 and created["status"] == "created"
-    status, again = _json("POST", "/api/v1/kb/it/records", {
+    status, again = _json("POST", f"/api/v1/kb/{kb}/records", {
         "recordName": "天気",
         "mimeType": "application/blocks",
         "externalRecordId": "weather",
@@ -54,15 +56,15 @@ def test_push_index_retrieve_and_debug():
     assert status == 200 and again["status"] == "unchanged"
     deadline = time.time() + 180
     while time.time() < deadline:
-        _code, counts = _json("GET", "/api/v1/kb/it/indexing/counts")
+        _code, counts = _json("GET", f"/api/v1/kb/{kb}/indexing/counts")
         if counts.get("QUEUED") == 0 and counts.get("IN_PROGRESS") == 0 and counts.get("COMPLETED", 0) >= 1:
             break
         time.sleep(1)
     else:
         pytest.fail(f"not indexed: {counts}")
-    _code, found = _json("POST", "/api/v1/retrieve", {"query": "東京の天気", "limit": 10, "filters": {"kb": ["it"]}})
+    _code, found = _json("POST", "/api/v1/retrieve", {"query": "東京の天気", "limit": 10, "filters": {"kb": [kb]}})
     assert found["chunks"]
     assert "晴れ" in found["chunks"][0]["text"]
-    _code, debug = _json("POST", "/api/v1/debug/retrieve", {"query": "東京の天気", "limit": 10, "filters": {"kb": ["it"]}})
+    _code, debug = _json("POST", "/api/v1/debug/retrieve", {"query": "東京の天気", "limit": 10, "filters": {"kb": [kb]}})
     assert debug["breakdown"][0]["rrf"] >= debug["breakdown"][-1]["rrf"]
     assert "dense" in debug["breakdown"][0]

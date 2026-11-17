@@ -19,23 +19,25 @@ class Decision:
 def decide(
     *,
     stored_version: int | None,
-    stored_digest: str | None,
+    stored_blocks_sha: str | None,
+    stored_request_digest: str | None,
     version: int,
-    digest: str,
+    blocks_sha: str,
+    request_digest: str,
 ) -> Decision:
-    """Match PipesHub `_decide` without trash, org, or images.
+    """One row of the push table.
 
-    `stored_digest` is the blocks digest already stored. `digest` is the
-    incoming blocks digest. Equal digests are the same content.
+    Same version compares the request digest. A higher version reindexes only
+    when the blocks digest changes. Name and metadata keep the current status.
     """
     if stored_version is None:
         return Decision("create", 201)
     if version < stored_version:
         return Decision("stale", 409, "STALE_VERSION", stored_version)
     if version == stored_version:
-        if digest == stored_digest:
+        if request_digest == stored_request_digest:
             return Decision("unchanged", 200)
         return Decision("conflict", 409, "VERSION_CONFLICT", stored_version)
-    if digest == stored_digest:
+    if blocks_sha == stored_blocks_sha:
         return Decision("metadata", 200)
     return Decision("content", 200)

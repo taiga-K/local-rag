@@ -8,7 +8,15 @@ import json
 
 import pytest
 
-from kbindex.contract import PushRefusal, blocks_digest, parse_envelope
+from kbindex.contract import (
+    PushRefusal,
+    blocks_digest,
+    content_rev,
+    parse_envelope,
+    properties_of,
+    request_digest,
+    stored_bytes,
+)
 
 
 def envelope(**over) -> bytes:
@@ -115,3 +123,34 @@ def test_table_row_kept():
     blocks = {"blocks": [{"index": 0, "type": "table_row", "data": {"cells": ["気温", "20度"]}}]}
     parsed = parse_envelope(envelope(blocks=blocks))
     assert parsed.blocks.blocks[0].data.cells == ["気温", "20度"]
+
+
+def test_omitted_empty_and_defaults_share_a_digest():
+    plain = envelope()
+    reordered = json.dumps(json.loads(plain), sort_keys=True).encode()
+    with_empty = json.loads(plain)
+    with_empty["blocks"]["block_groups"] = []
+    with_indent = json.loads(plain)
+    with_indent["blocks"]["blocks"][0]["list_metadata"] = {"indent_level": 0}
+
+    def rev(raw: bytes) -> str:
+        parsed = parse_envelope(raw)
+        return content_rev(stored_bytes(parsed.blocks, properties_of(parsed)))
+
+    assert rev(plain) == rev(reordered) == rev(json.dumps(with_empty).encode()) == rev(json.dumps(with_indent).encode())
+    named = json.loads(plain)
+    named["blocks"]["blocks"][0]["name"] = "題"
+    changed = json.loads(plain)
+    changed["blocks"]["blocks"][0]["data"] = "こんにちは！"
+    assert len({rev(plain), rev(json.dumps(named).encode()), rev(json.dumps(changed).encode())}) == 3
+    meta = json.loads(plain)
+    meta["metadata"] = {"schemaId": "notes", "values": {"z": None, "a": "ja"}}
+    parsed = parse_envelope(json.dumps(meta).encode())
+    assert request_digest(blocks_digest(parsed.blocks), properties_of(parsed)) != request_digest(blocks_digest(parsed.blocks), None)
+
+
+def test_image_uri_is_stored_and_not_fetched():
+    body = json.loads(envelope())
+    body["blocks"] = {"blocks": [{"index": 0, "type": "image", "data": {"uri": "https://example.com/a.png"}}]}
+    parsed = parse_envelope(json.dumps(body).encode())
+    assert parsed.blocks.blocks[0].data.uri == "https://example.com/a.png"

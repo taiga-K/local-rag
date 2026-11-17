@@ -8,6 +8,7 @@ We sum independent retrievers. Gap 3: table cells are not replaced by a summary.
 
 from kbindex.bm25 import Corpus
 from kbindex.chunking import chunk_blocks
+from kbindex.db import chunk_public_id
 from kbindex.contract import block_text, parse_envelope
 from kbindex.rrf import rrf_scores
 from kbindex.tokenize import char_bigrams, sudachi_terms
@@ -21,6 +22,27 @@ def test_short_block_is_one_piece():
 
 def test_empty_block_yields_nothing():
     assert chunk_blocks([(0, "   ")], window=8) == []
+
+
+def test_window_edges_rejoin_without_overlap():
+    text = "あいうえお"
+    exact = chunk_blocks([(0, text[:4])], window=4)
+    over = chunk_blocks([(1, text)], window=4)
+    assert len(exact) == 1 and exact[0].text == text[:4] and exact[0].token_count == 4
+    assert [p.text for p in over] == ["あいうえ", "お"]
+    assert "".join(p.text for p in over) == text
+    assert over[0].text[-1] not in over[1].text
+
+
+def test_public_id_adds_piece_only_after_the_first_slice():
+    assert chunk_public_id("rec", 2, 0, 1) == "rec:2"
+    assert chunk_public_id("rec", 2, 0, 3) == "rec:2"
+    assert chunk_public_id("rec", 2, 1, 3) == "rec:2:1"
+
+
+def test_two_blocks_only_the_long_one_grows_piece():
+    pieces = chunk_blocks([(0, "短い"), (1, "あいうえおか")], window=3)
+    assert [(p.block_index, p.piece) for p in pieces] == [(0, 0), (1, 0), (1, 1)]
 
 
 def test_split_has_no_overlap_and_rejoins():
@@ -64,7 +86,8 @@ def test_char_bigram_provisional():
     assert char_bigrams("あ") == []
     assert char_bigrams("あい") == ["あい"]
     assert char_bigrams("あいう") == ["あい", "いう"]
-    assert char_bigrams("ＡＢ") == ["ab"]
+    assert char_bigrams("ＡＢ") == ["AB"]
+    assert char_bigrams("a\x00b") == ["ab"]
 
 
 def test_bm25_prefers_the_document_that_contains_the_term():
@@ -75,8 +98,12 @@ def test_bm25_prefers_the_document_that_contains_the_term():
     assert ranked[0][0] == "yes"
     assert ranked[0][1] > 0
     # k1 changes the score and not the term set.
+    terms = sudachi_terms("東京都の天気は晴れ", mode="C")
+    other_terms = sudachi_terms("大阪の人口", mode="C")
     other = Corpus(k1=2.0)
-    other.add("yes", sudachi_terms("東京都の天気は晴れ", mode="C"))
+    other.add("yes", terms)
+    other.add("no", other_terms)
+    assert set(other.df) == set(corpus.df)
     assert other.score("yes", ["天気"]) != corpus.score("yes", ["天気"])
 
 
@@ -85,6 +112,13 @@ def test_rrf_hand_computed():
     assert fused["a"] == pytest_approx(1 / 61)
     assert fused["b"] == pytest_approx(1 / 62 + 1 / 61)
     assert list(dict(rrf_scores([["a"], []], k=60)))[0] == "a"
+
+
+def test_rrf_tie_keeps_input_order():
+    ranked = [chunk_id for chunk_id, _score in rrf_scores([["c", "a"], ["c", "b"]], k=60)]
+    assert ranked == ["c", "a", "b"]
+    assert dict(rrf_scores([["a"], []], k=60))["a"] == pytest_approx(1 / 61)
+    assert dict(rrf_scores([["a"], ["a"]], k=60))["a"] == pytest_approx(2 / 61)
 
 
 def test_rrf_rejects_non_positive_k():

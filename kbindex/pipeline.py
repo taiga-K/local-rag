@@ -1,4 +1,4 @@
-"""Index one record and answer one query. Idempotent given the current row."""
+"""Index one record and answer one query from the current row."""
 
 from __future__ import annotations
 
@@ -6,26 +6,102 @@ import json
 import os
 import uuid
 from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from qdrant_client.http import models as qm
 
 from kbindex.bm25 import Corpus
 from kbindex.chunking import chunk_blocks
-from kbindex.contract import Envelope, block_text, blocks_digest, content_rev
-from kbindex.db import Database, record_id_for
+from kbindex.config import Settings
+from kbindex.contract import Envelope, block_text, blocks_digest, content_rev, properties_of, request_digest, stored_bytes
+from kbindex.db import (
+    Database,
+    bm25_rows,
+    chunk_public_id,
+    clear_postings,
+    delete_chunks_for,
+    generation_row,
+    hydrate_chunks,
+    insert_chunks,
+    insert_postings,
+    queue_records_with_text,
+    rebuild_bm25,
+    record_id_for,
+    record_of_chunk,
+    replace_graph,
+    replace_groups,
+    write_generation,
+)
 from kbindex.embed import Embedder
-from kbindex.qdrant_store import COLLECTION, Vectors
+from kbindex.qdrant_store import QdrantUnavailable, Vectors
 from kbindex.rrf import rrf_scores
-from kbindex.settings import Settings
 from kbindex.tokenize import char_bigrams, sudachi_terms
 
 
-def chunk_public_id(record_id: str, block_index: int, piece: int, piece_count: int) -> str:
-    base = f"{record_id}:{block_index}"
-    if piece_count == 1 or piece == 0:
-        return base
-    return f"{base}:{piece}"
+@dataclass(frozen=True)
+class Prepared:
+    blocks_sha: str
+    request_digest: str
+    stored: bytes
+    content_rev: str
+    revision: str
+
+
+def prepare(envelope: Envelope) -> Prepared:
+    props = properties_of(envelope)
+    blocks_sha = blocks_digest(envelope.blocks)
+    digest = request_digest(blocks_sha, props)
+    stored = stored_bytes(envelope.blocks, props)
+    rev = content_rev(stored)
+    return Prepared(blocks_sha, digest, stored, rev, f"pb1:{digest}:{rev}")
+
+
+def write_payload(directory: Path, kb_id: str, record_id: str, raw: bytes, stored: bytes) -> tuple[str, str]:
+    folder = directory / kb_id
+    folder.mkdir(parents=True, exist_ok=True)
+    raw_path = folder / f"{record_id}.raw.json"
+    stored_path = folder / f"{record_id}.stored.json"
+    tmp_raw = folder / f"{record_id}.raw.json.tmp"
+    tmp_stored = folder / f"{record_id}.stored.json.tmp"
+    tmp_raw.write_bytes(raw)
+    tmp_stored.write_bytes(stored)
+    os.replace(tmp_raw, raw_path)
+    os.replace(tmp_stored, stored_path)
+    return str(raw_path), str(stored_path)
+
+
+def _terms(settings: Settings, name: str, text: str) -> list[str]:
+    if name == "sudachi":
+        return sudachi_terms(text, mode=settings.sudachi_mode, normalize=settings.sudachi_normalize)
+    if name == "char_bigram":
+        return char_bigrams(text)
+    return []
+
+
+def texts_of_stored(payload: dict) -> list[tuple[int, str, str]]:
+    """`(index, type, indexable text)` for each stored block. Images keep an empty text."""
+    out = []
+    for block in payload.get("blocks") or []:
+        kind = block.get("type") or ""
+        if kind == "text":
+            text = block.get("data") or ""
+        elif kind == "table_row":
+            data = block.get("data") or {}
+            if data.get("cells"):
+                text = "\t".join(data["cells"])
+            else:
+                text = data.get("row_natural_language_text") or ""
+        else:
+            text = ""
+        out.append((int(block.get("index") or 0), kind, text if isinstance(text, str) else ""))
+    return out
+
+
+def build_pieces(record_id: str, payload: dict, embedder: Embedder) -> list:
+    pairs = [(index, text) for index, _kind, text in texts_of_stored(payload)]
+    return chunk_blocks(pairs, window=embedder.split_limit(), spans=embedder.token_spans)
 
 
 class Engine:
@@ -34,263 +110,283 @@ class Engine:
         self.db = db
         self.vectors = vectors
         self.embedder = embedder
+        self.fingerprint = settings.index_fingerprint(hidden_size=embedder.dim, max_seq_length=embedder.max_seq_length)
 
-    def model_change_blocked(self) -> bool:
+    def fingerprint_mismatch(self) -> bool:
         with self.db.connect() as conn:
-            row = conn.execute("select fingerprint from index_generation where id = 1").fetchone()
-        if row is None or row["fingerprint"] == self.settings.fingerprint:
+            row = generation_row(conn)
+        if row is None:
+            return False
+        return row["fingerprint"] != self.fingerprint
+
+    def ensure_generation(self) -> None:
+        """Insert the current fingerprint when the table is empty. Leave a mismatch alone."""
+        with self.db.connect() as conn:
+            row = generation_row(conn)
+            if row is None:
+                write_generation(
+                    conn,
+                    fingerprint=self.fingerprint,
+                    model=self.settings.model,
+                    dimension=self.embedder.dim,
+                    max_seq_length=self.embedder.max_seq_length,
+                    keyword={"tokenizers": list(self.settings.tokenizers), "mode": self.settings.sudachi_mode, "normalize": self.settings.sudachi_normalize},
+                    fusion={"method": self.settings.fusion_method, "k": self.settings.fusion_k},
+                )
+                conn.commit()
+            elif row["fingerprint"] != self.fingerprint:
+                try:
+                    if self.vectors.count() > 0:
+                        return
+                    self.vectors.drop()
+                except QdrantUnavailable:
+                    return
+                write_generation(
+                    conn,
+                    fingerprint=self.fingerprint,
+                    model=self.settings.model,
+                    dimension=self.embedder.dim,
+                    max_seq_length=self.embedder.max_seq_length,
+                    keyword={"tokenizers": list(self.settings.tokenizers), "mode": self.settings.sudachi_mode, "normalize": self.settings.sudachi_normalize},
+                    fusion={"method": self.settings.fusion_method, "k": self.settings.fusion_k},
+                )
+                conn.commit()
+        try:
+            self.vectors.ensure(self.embedder.dim)
+        except QdrantUnavailable:
+            return
+
+    def config_refused(self) -> bool:
+        if not self.fingerprint_mismatch():
             return False
         return self.vectors.count() > 0
 
-    def ensure_generation(self) -> None:
-        if self.model_change_blocked():
-            return
+    def reindex(self) -> tuple[str, list]:
+        self.vectors.drop()
         self.vectors.ensure(self.embedder.dim)
         with self.db.connect() as conn:
-            conn.execute(
-                """
-                insert into index_generation (id, fingerprint, model, ready)
-                values (1, %s, %s, true)
-                on conflict (id) do update set fingerprint = excluded.fingerprint, model = excluded.model, ready = true
-                """,
-                (self.settings.fingerprint, self.settings.model),
+            clear_postings(conn)
+            write_generation(
+                conn,
+                fingerprint=self.fingerprint,
+                model=self.settings.model,
+                dimension=self.embedder.dim,
+                max_seq_length=self.embedder.max_seq_length,
+                keyword={"tokenizers": list(self.settings.tokenizers), "mode": self.settings.sudachi_mode, "normalize": self.settings.sudachi_normalize},
+                fusion={"method": self.settings.fusion_method, "k": self.settings.fusion_k},
             )
+            rows = queue_records_with_text(conn)
             conn.commit()
+        return self.fingerprint, rows
 
-    def index_record(self, kb_id: str, external_record_id: str) -> str:
+    def index_record(self, kb_id: str, external_record_id: str, *, event_version: int, event_rev: str) -> str:
         rid = record_id_for(kb_id, external_record_id)
         with self.db.connect() as conn:
-            row = conn.execute("select * from records where record_id = %s", (rid,)).fetchone()
-            if row is None:
-                return "gone"
+            updated = conn.execute(
+                """
+                update records
+                set indexing_status = 'IN_PROGRESS', failure_reason = null, updated_at = now()
+                where record_id = %s and version = %s and content_rev = %s
+                  and indexing_status in ('QUEUED', 'IN_PROGRESS', 'FAILED', 'COMPLETED', 'EMPTY')
+                returning stored_path, record_name, source_modified_ms, version, content_rev
+                """,
+                (rid, event_version, event_rev),
+            ).fetchone()
+            conn.commit()
+        if updated is None:
+            return "stale"
+        try:
+            payload = json.loads(Path(updated["stored_path"]).read_bytes())
+            pieces = build_pieces(str(rid), payload, self.embedder)
+            self._set_embed_progress(rid, event_version, 0, len(pieces))
+            if not pieces:
+                return self._finish_empty(rid, event_version, event_rev)
+            vectors = self.embedder.embed_documents([piece.text for piece in pieces])
+            return self._finish_chunks(rid, kb_id, updated, pieces, vectors, event_version, event_rev, payload)
+        except QdrantUnavailable:
+            self._fail(rid, event_version, event_rev, "QDRANT_UNAVAILABLE")
+            return "FAILED"
+        except Exception as exc:
+            self._fail(rid, event_version, event_rev, type(exc).__name__[:200])
+            return "FAILED"
+
+    def _finish_empty(self, rid, event_version: int, event_rev: str) -> str:
+        with self.db.connect() as conn:
+            row = conn.execute("select version, content_rev from records where record_id = %s for update", (rid,)).fetchone()
+            if row is None or row["version"] != event_version or row["content_rev"] != event_rev:
+                conn.rollback()
+                return "stale"
+            delete_chunks_for(conn, rid)
+            rebuild_bm25(conn)
             conn.execute(
-                "update records set indexing_status = 'IN_PROGRESS', failure_reason = null, embed_done = 0, embed_total = null, updated_at = now() where record_id = %s",
-                (rid,),
+                """
+                update records set indexing_status = 'EMPTY', failure_reason = null, updated_at = now()
+                where record_id = %s and version = %s
+                """,
+                (rid, event_version),
             )
             conn.commit()
         try:
-            stored = json.loads(Path(row["stored_path"]).read_text(encoding="utf-8"))
-            blocks = stored.get("blocks") or []
-            texts = []
-            for block in blocks:
-                if block.get("type") == "text":
-                    texts.append((block["index"], block.get("data") or ""))
-                elif block.get("type") == "table_row":
-                    data = block.get("data") or {}
-                    if data.get("cells"):
-                        texts.append((block["index"], "\t".join(data["cells"])))
-                    else:
-                        texts.append((block["index"], data.get("row_natural_language_text") or ""))
-            window = max(8, self.embedder.max_seq_length - 8)
-            pieces = chunk_blocks(texts, window=window)
-            by_block: dict[int, int] = Counter(p.block_index for p in pieces)
-            # piece_count per block for ids
-            counts: dict[int, int] = {}
-            for piece in pieces:
-                counts[piece.block_index] = counts.get(piece.block_index, 0) + 1
-            if not pieces:
-                self._replace_children(rid, [], [])
-                self.vectors.delete_record(str(rid))
-                self._set_status(rid, "EMPTY", None, 0, 0)
-                return "EMPTY"
-            vectors = self.embedder.embed_documents([p.text for p in pieces])
-            chunk_rows = []
-            points = []
-            token_docs: dict[str, dict[str, list[str]]] = {name: {} for name in self.settings.tokenizers}
-            for piece, vector in zip(pieces, vectors, strict=True):
-                cid = chunk_public_id(str(rid), piece.block_index, piece.piece, counts[piece.block_index])
-                chunk_rows.append((cid, piece.block_index, piece.piece, piece.text, piece.token_count))
-                points.append(qm.PointStruct(
-                    id=str(uuid.uuid5(uuid.UUID("c3a1e5b0-7d2e-4b1a-9f60-4a0b1c2d3e4f"), cid)),
-                    vector=vector,
-                    payload={
-                        "chunkId": cid,
-                        "recordId": str(rid),
-                        "kbId": kb_id,
-                        "blockIndex": piece.block_index,
-                        "piece": piece.piece,
-                        "text": piece.text,
-                        "recordName": row["record_name"],
-                        "mimeType": "application/blocks",
-                        "sourceModifiedMs": row["source_modified_ms"],
-                    },
-                ))
-                for name in self.settings.tokenizers:
-                    token_docs[name][cid] = self._terms(name, piece.text)
             self.vectors.delete_record(str(rid))
-            self.vectors.ensure(self.embedder.dim)
-            self.vectors.upsert(points)
-            self._replace_children(rid, [(block["index"], block.get("type"), block_plain(block)) for block in blocks], chunk_rows)
-            self._write_bm25(str(rid), token_docs)
-            self._set_status(rid, "COMPLETED", None, len(pieces), len(pieces))
-            return "COMPLETED"
-        except Exception as exc:
-            self._set_status(rid, "FAILED", type(exc).__name__, None, None)
+        except QdrantUnavailable:
+            self._fail(rid, event_version, event_rev, "QDRANT_UNAVAILABLE")
             return "FAILED"
+        return "EMPTY"
 
-    def _terms(self, name: str, text: str) -> list[str]:
-        if name == "sudachi":
-            return sudachi_terms(text, mode=self.settings.sudachi_mode, normalize=self.settings.sudachi_normalize)
-        if name == "char_bigram":
-            return char_bigrams(text)
-        return []
-
-    def _set_status(self, rid, status: str, reason: str | None, done, total) -> None:
+    def _finish_chunks(self, rid, kb_id, updated, pieces, vectors, event_version, event_rev, payload) -> str:
+        chunk_rows = []
+        points = []
+        token_docs: dict[str, dict[str, list[str]]] = {name: {} for name in self.settings.tokenizers}
+        counts: dict[int, int] = {}
+        for piece in pieces:
+            counts[piece.block_index] = counts.get(piece.block_index, 0) + 1
+        listed = texts_of_stored(payload)
+        for piece, vector in zip(pieces, vectors, strict=True):
+            cid = chunk_public_id(str(rid), piece.block_index, piece.piece, counts[piece.block_index])
+            chunk_rows.append((cid, piece.block_index, piece.piece, piece.text, piece.token_count))
+            payload_out = {
+                "chunkId": cid,
+                "recordId": str(rid),
+                "kbId": kb_id,
+                "blockIndex": piece.block_index,
+                "piece": piece.piece,
+                "text": piece.text,
+                "recordName": updated["record_name"],
+                "mimeType": "application/blocks",
+            }
+            if updated["source_modified_ms"] is not None:
+                payload_out["sourceModifiedMs"] = int(updated["source_modified_ms"])
+            points.append(
+                qm.PointStruct(
+                    id=str(uuid.uuid5(uuid.UUID("c3a1e5b0-7d2e-4b1a-9f60-4a0b1c2d3e4f"), cid)),
+                    vector={"dense": vector},
+                    payload=payload_out,
+                )
+            )
+            for name in self.settings.tokenizers:
+                token_docs[name][cid] = _terms(self.settings, name, piece.text)
         with self.db.connect() as conn:
-            still = conn.execute("select 1 from records where record_id = %s", (rid,)).fetchone()
-            if still is None:
+            row = conn.execute("select version, content_rev from records where record_id = %s for update", (rid,)).fetchone()
+            if row is None:
+                conn.rollback()
+                try:
+                    self.vectors.delete_record(str(rid))
+                except QdrantUnavailable:
+                    pass
+                return "gone"
+            if row["version"] != event_version or row["content_rev"] != event_rev:
+                conn.rollback()
+                return "stale"
+            try:
                 self.vectors.delete_record(str(rid))
-                return
+                self.vectors.ensure(self.embedder.dim)
+                self.vectors.upsert(points)
+            except QdrantUnavailable:
+                conn.execute(
+                    """
+                    update records set indexing_status = 'FAILED', failure_reason = 'QDRANT_UNAVAILABLE', updated_at = now()
+                    where record_id = %s and version = %s
+                    """,
+                    (rid, event_version),
+                )
+                conn.commit()
+                return "FAILED"
+            graph = [(index, parent_of(payload, index), kind, text) for index, kind, text in listed]
+            replace_graph(conn, rid, graph)
+            replace_groups(conn, rid, groups_of(payload))
+            delete_chunks_for(conn, rid)
+            insert_chunks(conn, rid, chunk_rows)
+            for name, docs in token_docs.items():
+                insert_postings(conn, name, docs)
+            rebuild_bm25(conn)
             conn.execute(
                 """
-                update records set indexing_status = %s, failure_reason = %s, embed_done = %s, embed_total = %s, updated_at = now()
-                where record_id = %s
+                update records set indexing_status = 'COMPLETED', failure_reason = null, updated_at = now()
+                where record_id = %s and version = %s
                 """,
-                (status, reason, done, total, rid),
+                (rid, event_version),
             )
             conn.commit()
+        return "COMPLETED"
 
-    def _replace_children(self, rid, blocks, chunks) -> None:
+    def _fail(self, rid, event_version: int, event_rev: str, reason: str) -> None:
         with self.db.connect() as conn:
-            conn.execute("delete from chunks where record_id = %s", (rid,))
-            conn.execute("delete from blocks where record_id = %s", (rid,))
-            for position, kind, text in blocks:
-                conn.execute(
-                    "insert into blocks (block_id, record_id, position, type, text) values (%s, %s, %s, %s, %s)",
-                    (uuid.uuid4(), rid, position, kind, text),
-                )
-            for cid, block_index, piece, text, tokens in chunks:
-                conn.execute(
-                    "insert into chunks (chunk_id, record_id, block_index, piece, text, token_count) values (%s, %s, %s, %s, %s, %s)",
-                    (cid, rid, block_index, piece, text, tokens),
-                )
-            conn.commit()
-
-    def _write_bm25(self, record_id: str, token_docs: dict[str, dict[str, list[str]]]) -> None:
-        with self.db.connect() as conn:
-            old = conn.execute("select chunk_id from chunks where record_id = %s", (record_id,)).fetchall()
-            # chunks were just replaced, so delete postings for this record's previous chunk ids by prefix
-            conn.execute("delete from bm25_postings where chunk_id like %s", (record_id + ":%",))
-            for tokenizer, docs in token_docs.items():
-                for cid, terms in docs.items():
-                    counts = Counter(terms)
-                    doc_len = sum(counts.values())
-                    for term, tf in counts.items():
-                        conn.execute(
-                            """
-                            insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
-                            values (1, %s, %s, %s, %s, %s)
-                            on conflict (generation, tokenizer, term, chunk_id) do update set tf = excluded.tf, doc_len = excluded.doc_len
-                            """,
-                            (tokenizer, term, cid, tf, doc_len),
-                        )
             conn.execute(
                 """
-                insert into bm25_terms (generation, tokenizer, term, df)
-                select generation, tokenizer, term, count(distinct chunk_id)
-                from bm25_postings group by generation, tokenizer, term
-                on conflict (generation, tokenizer, term) do update set df = excluded.df
-                """
-            )
-            conn.execute("delete from bm25_terms where df = 0")
-            conn.execute(
-                """
-                insert into bm25_stats (generation, tokenizer, doc_count, total_tokens)
-                select 1, tokenizer, count(distinct chunk_id), coalesce(sum(doc_len), 0)
-                from (
-                  select tokenizer, chunk_id, max(doc_len) as doc_len from bm25_postings group by tokenizer, chunk_id
-                ) s group by tokenizer
-                on conflict (generation, tokenizer) do update set doc_count = excluded.doc_count, total_tokens = excluded.total_tokens
-                """
+                update records set indexing_status = 'FAILED', failure_reason = %s, updated_at = now()
+                where record_id = %s and version = %s and content_rev = %s
+                """,
+                (reason, rid, event_version, event_rev),
             )
             conn.commit()
-        del old
 
-    def search(self, query: str, *, limit: int, kb_id: str | None, max_per_record: int | None) -> dict:
-        if self.model_change_blocked():
-            return {"blocked": True}
-        dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=50, kb_id=kb_id)
+    def _set_embed_progress(self, rid, event_version: int, done: int, total: int) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                update records set embed_done = %s, embed_total = %s
+                where record_id = %s and version = %s and indexing_status = 'IN_PROGRESS'
+                """,
+                (done, total, rid, event_version),
+            )
+            conn.commit()
+
+    def search(self, query: str, *, limit: int, kb_ids: list[str] | None, max_per_record: int | None, bounds: dict) -> dict:
+        dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=100, kb_ids=kb_ids)
         keyword_pairs: dict[str, list[tuple[str, float]]] = {}
+        for name in ("sudachi", "char_bigram"):
+            if name in self.settings.tokenizers:
+                keyword_pairs[name] = self._bm25(name, query)
+            else:
+                keyword_pairs[name] = []
+        lists = [[cid for cid, _score in dense_pairs]]
         for name in self.settings.tokenizers:
-            keyword_pairs[name] = self._bm25(name, query, kb_id)
-        lists = [[cid for cid, _ in dense_pairs]]
-        lists.extend([cid for cid, _ in pairs] for pairs in keyword_pairs.values())
-        fused = rrf_scores(lists, k=self.settings.fusion_k)
-        if kb_id:
-            fused = [(cid, score) for cid, score in fused if self._chunk_kb(cid) == kb_id]
+            lists.append([cid for cid, _score in keyword_pairs.get(name, [])])
+        ranked = rrf_scores(lists, k=self.settings.fusion_k)
+        fused = self._filter_fused(ranked, kb_ids, bounds)
         if max_per_record is not None:
             kept = []
             seen: Counter[str] = Counter()
-            for cid, score in fused:
-                rec = cid.split(":")[0]
-                if seen[rec] >= max_per_record:
+            for cid, score, row in fused:
+                record = record_of_chunk(cid)
+                if seen[record] >= max_per_record:
                     continue
-                seen[rec] += 1
-                kept.append((cid, score))
+                seen[record] += 1
+                kept.append((cid, score, row))
             fused = kept
-        fused = fused[:limit]
-        chunks = [self._chunk_json(cid, score) for cid, score in fused]
-        return {"chunks": chunks, "incomplete": False, "dense": dense_pairs, "keyword": keyword_pairs, "fused": fused}
-
-    def _bm25(self, tokenizer: str, query: str, kb_id: str | None) -> list[tuple[str, float]]:
-        terms = self._terms(tokenizer, query)
-        if not terms:
-            return []
-        with self.db.connect() as conn:
-            stats = conn.execute(
-                "select doc_count, total_tokens from bm25_stats where generation = 1 and tokenizer = %s",
-                (tokenizer,),
-            ).fetchone()
-            if not stats or stats["doc_count"] == 0:
-                return []
-            corpus = Corpus(k1=self.settings.bm25_k1, b=self.settings.bm25_b)
-            corpus.doc_count = stats["doc_count"]
-            corpus.total_tokens = stats["total_tokens"]
-            rows = conn.execute(
-                "select term, df from bm25_terms where generation = 1 and tokenizer = %s and term = any(%s)",
-                (tokenizer, list(set(terms))),
-            ).fetchall()
-            for row in rows:
-                corpus.df[row["term"]] = row["df"]
-            posts = conn.execute(
-                "select term, chunk_id, tf, doc_len from bm25_postings where generation = 1 and tokenizer = %s and term = any(%s)",
-                (tokenizer, list(set(terms))),
-            ).fetchall()
-        by_doc: dict[str, list[tuple[str, int, int]]] = {}
-        for row in posts:
-            by_doc.setdefault(row["chunk_id"], []).append((row["term"], row["tf"], row["doc_len"]))
-        for cid, triples in by_doc.items():
-            if kb_id and self._chunk_kb(cid) != kb_id:
-                continue
-            counts: Counter[str] = Counter()
-            doc_len = triples[0][2]
-            for term, tf, _ in triples:
-                counts[term] = tf
-            corpus.tf[cid] = counts
-            corpus.lengths[cid] = doc_len
-        return corpus.rank(terms)
-
-    def _chunk_kb(self, chunk_id: str) -> str | None:
-        record = chunk_id.split(":")[0]
-        with self.db.connect() as conn:
-            row = conn.execute("select kb_id from records where record_id = %s", (record,)).fetchone()
-        return row["kb_id"] if row else None
-
-    def _chunk_json(self, chunk_id: str, score: float) -> dict:
-        record = chunk_id.split(":")[0]
-        with self.db.connect() as conn:
-            row = conn.execute(
-                """
-                select c.text, c.block_index, r.record_id, r.record_name, r.kb_id, r.source_modified_ms
-                from chunks c join records r on r.record_id = c.record_id
-                where c.chunk_id = %s
-                """,
-                (chunk_id,),
-            ).fetchone()
-        if row is None:
-            return {"id": chunk_id, "text": "", "score": score, "record": {}, "citation": {"url": None, "recordUrl": None, "pageNum": None, "blockIndex": None}}
+        limited = fused[:limit]
         return {
-            "id": chunk_id,
+            "chunks": [self._chunk_json(item) for item in limited],
+            "dense": dense_pairs,
+            "keyword": keyword_pairs,
+            "fused": fused,
+            "incomplete": False,
+        }
+
+    def _filter_fused(self, fused, kb_ids: list[str] | None, bounds: dict):
+        ids = [cid for cid, _score in fused]
+        with self.db.connect() as conn:
+            rows = hydrate_chunks(conn, ids)
+        by_id = {row["chunk_id"]: row for row in rows}
+        kept = []
+        for cid, score in fused:
+            row = by_id.get(cid)
+            if row is None:
+                continue
+            if kb_ids and row["kb_id"] not in kb_ids:
+                continue
+            if not _in_bounds(row, bounds):
+                continue
+            kept.append((cid, score, row))
+        return kept
+
+    def _chunk_json(self, item) -> dict:
+        cid, score, row = item
+        updated = row["source_modified_ms"]
+        if updated is None and row["updated_at"] is not None:
+            updated = int(row["updated_at"].timestamp() * 1000)
+        return {
+            "id": cid,
             "text": row["text"],
             "score": score,
             "record": {
@@ -298,48 +394,82 @@ class Engine:
                 "name": row["record_name"],
                 "connector": row["kb_id"],
                 "mimeType": "application/blocks",
-                "updatedAt": row["source_modified_ms"],
+                "updatedAt": updated,
             },
-            "citation": {"url": None, "recordUrl": None, "pageNum": None, "blockIndex": row["block_index"]},
+            "citation": {
+                "url": None,
+                "recordUrl": None,
+                "pageNum": None,
+                "blockIndex": row["block_index"],
+            },
         }
 
+    def _bm25(self, tokenizer: str, query: str) -> list[tuple[str, float]]:
+        terms = _terms(self.settings, tokenizer, query)
+        if not terms:
+            return []
+        with self.db.connect() as conn:
+            stats, df_rows, posts = bm25_rows(conn, tokenizer, list(set(terms)))
+        if not stats or stats["doc_count"] == 0:
+            return []
+        corpus = Corpus(k1=self.settings.bm25_k1, b=self.settings.bm25_b)
+        corpus.doc_count = int(stats["doc_count"])
+        corpus.total_tokens = int(stats["total_tokens"])
+        for row in df_rows:
+            corpus.df[row["term"]] = int(row["df"])
+        by_doc: dict[str, list] = {}
+        for row in posts:
+            by_doc.setdefault(row["chunk_id"], []).append(row)
+        for cid, triples in by_doc.items():
+            counts: Counter[str] = Counter()
+            for row in triples:
+                counts[row["term"]] = int(row["tf"])
+            corpus.tf[cid] = counts
+            corpus.lengths[cid] = int(triples[0]["doc_len"])
+        return corpus.rank(terms)[:100]
 
-def block_plain(block: dict) -> str:
-    if block.get("type") == "text":
-        return block.get("data") or ""
-    if block.get("type") == "table_row":
-        data = block.get("data") or {}
-        if data.get("cells"):
-            return "\t".join(data["cells"])
-        return data.get("row_natural_language_text") or ""
-    return ""
+
+def parent_of(payload: dict, index: int) -> int | None:
+    for block in payload.get("blocks") or []:
+        if int(block.get("index") or 0) == index:
+            parent = block.get("parent_index")
+            return int(parent) if parent is not None else None
+    return None
 
 
-def write_payload(directory: Path, kb_id: str, record_id: str, raw: bytes, stored: dict) -> tuple[str, str]:
-    folder = directory / kb_id
-    folder.mkdir(parents=True, exist_ok=True)
-    raw_path = folder / f"{record_id}.raw.json"
-    stored_path = folder / f"{record_id}.stored.json"
-    tmp_raw = folder / f"{record_id}.raw.json.tmp"
-    tmp_stored = folder / f"{record_id}.stored.json.tmp"
-    tmp_raw.write_bytes(raw)
-    tmp_stored.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp_raw, raw_path)
-    os.replace(tmp_stored, stored_path)
-    return str(raw_path), str(stored_path)
+def groups_of(payload: dict) -> list[tuple[int, int | None, str, str | None]]:
+    out = []
+    for group in payload.get("block_groups") or []:
+        parent = group.get("parent_index")
+        out.append((int(group.get("index") or 0), int(parent) if parent is not None else None, group.get("type") or "", group.get("name")))
+    return out
 
 
-def stored_from(envelope: Envelope) -> dict:
-    blocks = []
+def _in_bounds(row, bounds: dict) -> bool:
+    created = row["created_at"]
+    if bounds.get("created_after") and created < bounds["created_after"]:
+        return False
+    if bounds.get("created_before") and created > bounds["created_before"]:
+        return False
+    modified = row["source_modified_ms"]
+    if bounds.get("modified_after") or bounds.get("modified_before"):
+        if modified is None:
+            return False
+        if bounds.get("modified_after") and modified < _ms(bounds["modified_after"]):
+            return False
+        if bounds.get("modified_before") and modified > _ms(bounds["modified_before"]):
+            return False
+    return True
+
+
+def _ms(moment: datetime) -> int:
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return int(moment.timestamp() * 1000)
+
+
+def has_indexable_text(envelope: Envelope) -> bool:
     for block in envelope.blocks.blocks or []:
-        item = block.model_dump(exclude_none=True)
-        blocks.append(item)
-    return {"blocks": blocks, "push_format": 1}
-
-
-def digest_of(envelope: Envelope) -> str:
-    return blocks_digest(envelope.blocks)
-
-
-def rev_of(stored: dict) -> str:
-    return content_rev(json.dumps(stored, ensure_ascii=False).encode())
+        if block_text(block).strip():
+            return True
+    return False

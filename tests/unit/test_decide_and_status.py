@@ -24,10 +24,38 @@ from kbindex.status import apply
     ],
 )
 def test_version_table(stored, digest, version, incoming, action, http, reason):
-    got = decide(stored_version=stored, stored_digest=digest, version=version, digest=incoming)
+    got = decide(
+        stored_version=stored,
+        stored_blocks_sha=digest,
+        stored_request_digest=digest,
+        version=version,
+        blocks_sha=incoming,
+        request_digest=incoming,
+    )
     assert (got.action, got.http_status, got.reason) == (action, http, reason)
     if reason:
         assert got.current_version == stored
+
+
+def test_same_blocks_different_request_digest():
+    conflict = decide(
+        stored_version=1,
+        stored_blocks_sha="blocks",
+        stored_request_digest="req-a",
+        version=1,
+        blocks_sha="blocks",
+        request_digest="req-b",
+    )
+    assert (conflict.action, conflict.reason, conflict.current_version) == ("conflict", "VERSION_CONFLICT", 1)
+    metadata = decide(
+        stored_version=1,
+        stored_blocks_sha="blocks",
+        stored_request_digest="req-a",
+        version=2,
+        blocks_sha="blocks",
+        request_digest="req-b",
+    )
+    assert metadata.action == "metadata" and metadata.http_status == 200
 
 
 def test_reprocess_and_lifecycle():
@@ -49,3 +77,10 @@ def test_reprocess_and_lifecycle():
 
 def test_claim_only_from_queued():
     assert apply("COMPLETED", "claim").refused == "NOT_QUEUED"
+
+
+def test_content_update_queues_and_metadata_keeps_status():
+    assert apply("COMPLETED", "push").status == "QUEUED"
+    assert apply("FAILED", "push", has_text=False).status == "QUEUED"
+    kept = apply("FAILED", "metadata", reason="QDRANT_UNAVAILABLE")
+    assert (kept.status, kept.failure_reason) == ("FAILED", "QDRANT_UNAVAILABLE")

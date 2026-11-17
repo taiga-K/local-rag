@@ -42,12 +42,8 @@ def sync_tree(api: str, kb: str, root: Path) -> None:
         rel = path.relative_to(root).as_posix()
         external = _external_id(rel)
         seen.add(external)
-        version = path.stat().st_mtime_ns
-        previous = ledger.get(external, {}).get("version", 0)
-        if version <= previous:
-            version = previous + 1 if path.stat().st_mtime_ns < previous else max(version, previous)
-            if path.stat().st_mtime_ns == previous:
-                continue
+        previous = int(ledger.get(external, {}).get("version", 0))
+        version = _file_version(path, previous)
         body = _blocks(path)
         status = _push(api, kb, external, path.name, version, body)
         print(f"{status} {external}")
@@ -80,21 +76,64 @@ def _blocks(path: Path) -> dict:
     return _html(text)
 
 
+_MAX_VERSION = 2**53 - 1
+
+
+def _file_version(path: Path, previous: int) -> int:
+    # Epoch nanoseconds do not fit in a version. Microseconds do.
+    version = path.stat().st_mtime_ns // 1000
+    if version > _MAX_VERSION:
+        version = _MAX_VERSION
+    if previous and version < previous:
+        version = min(previous + 1, _MAX_VERSION)
+    return version
+
+
 def _markdown(text: str) -> dict:
+    items: list[tuple[str, str]] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        value = "\n".join(buffer).strip()
+        buffer.clear()
+        if value:
+            items.append(("p", value))
+
+    for line in text.splitlines():
+        heading = re.match(r"^#{1,6}\s+(\S.*)$", line)
+        if heading:
+            flush()
+            items.append(("h", heading.group(1).strip()))
+        elif not line.strip():
+            flush()
+        else:
+            buffer.append(line)
+    flush()
     blocks = []
-    groups = []
-    for para in re.split(r"\n\s*\n", text.strip()):
-        if not para.strip():
-            continue
-        if para.startswith("#"):
-            groups.append({"index": len(groups), "type": "text_section", "name": para.lstrip("#").strip()})
+    starts = []
+    for kind, value in items:
+        if kind == "h":
+            starts.append(len(blocks))
         blocks.append({
             "index": len(blocks),
             "type": "text",
             "format": "markdown",
-            "data": para.strip(),
-            "parent_index": len(groups) - 1 if groups else None,
+            "sub_type": "heading" if kind == "h" else "paragraph",
+            "data": value,
         })
+    groups = []
+    for pos, start in enumerate(starts):
+        end = starts[pos + 1] - 1 if pos + 1 < len(starts) else len(blocks) - 1
+        groups.append({
+            "index": pos,
+            "type": "text_section",
+            "name": blocks[start]["data"][:1024],
+            "children": {"block_ranges": [{"start": start, "end": end}]},
+        })
+        for index in range(start, end + 1):
+            blocks[index]["parent_index"] = pos
+    if not blocks:
+        blocks = [{"index": 0, "type": "text", "format": "markdown", "data": ""}]
     body: dict = {"blocks": blocks}
     if groups:
         body["block_groups"] = groups
@@ -110,7 +149,8 @@ def _html(text: str) -> dict:
         value = node.get_text(" ", strip=True)
         if not value:
             continue
-        blocks.append({"index": len(blocks), "type": "text", "format": "html", "data": value, "sub_type": "heading" if node.name.startswith("h") else "paragraph"})
+        kind = "heading" if node.name.startswith("h") else "list_item" if node.name == "li" else "paragraph"
+        blocks.append({"index": len(blocks), "type": "text", "format": "html", "data": value, "sub_type": kind})
     if not blocks:
         blocks = [{"index": 0, "type": "text", "format": "html", "data": soup.get_text(" ", strip=True)}]
     return {"blocks": blocks}

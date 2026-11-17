@@ -35,10 +35,10 @@ def sudachi_terms(text: str, *, mode: str = "C", normalize: bool = True) -> list
 
 
 def char_bigrams(text: str) -> list[str]:
-    """Provisional. NFKC, casefold, drop space and control, then overlapping pairs."""
+    """Provisional rule: NFKC, drop space and control, then adjacent code points."""
     cleaned = []
-    for ch in unicodedata.normalize("NFKC", text).casefold():
-        if ch.isspace() or unicodedata.category(ch).startswith("C"):
+    for char in unicodedata.normalize("NFKC", text):
+        if char.isspace() or unicodedata.category(char).startswith("C"):
             continue
-        cleaned.append(ch)
+        cleaned.append(char)
     return [cleaned[i] + cleaned[i + 1] for i in range(len(cleaned) - 1)]

@@ -49,12 +49,34 @@ def split_block(text: str, *, window: int, encode: Tokenizer, decode: Decoder) -
     return parts
 
 
+def pieces_from_spans(text: str, spans: list[tuple[int, int]], window: int) -> list[tuple[str, int]]:
+    """Cut `text` on token spans. The pieces join back to `text` and do not overlap."""
+    if window < 1:
+        raise ValueError("window must be positive")
+    if not spans or len(spans) <= window:
+        count = len(spans) if spans else 1
+        return [(text, count)]
+    parts: list[tuple[str, int]] = []
+    start = 0
+    for offset in range(0, len(spans), window):
+        group = spans[offset : offset + window]
+        end = len(text) if offset + window >= len(spans) else group[-1][1]
+        if end < start:
+            end = start
+        piece = text[start:end]
+        if piece:
+            parts.append((piece, len(group)))
+        start = end
+    return parts
+
+
 def chunk_blocks(
     blocks: list[tuple[int, str]],
     *,
     window: int,
     encode: Tokenizer | None = None,
     decode: Decoder | None = None,
+    spans: Callable[[str], list[tuple[int, int]]] | None = None,
 ) -> list[Piece]:
     """`blocks` is `(block_index, text)`. Empty text yields no piece."""
     encode = encode or _char_tokens
@@ -62,6 +84,10 @@ def chunk_blocks(
     out: list[Piece] = []
     for index, text in blocks:
         if not text.strip():
+            continue
+        if spans is not None:
+            for piece_no, (part, count) in enumerate(pieces_from_spans(text, spans(text), window)):
+                out.append(Piece(index, piece_no, part, count))
             continue
         for piece_no, part in enumerate(split_block(text, window=window, encode=encode, decode=decode)):
             out.append(Piece(index, piece_no, part, len(encode(part))))

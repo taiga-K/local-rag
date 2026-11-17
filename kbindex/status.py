@@ -25,7 +25,9 @@ def apply(status: str | None, event: str, *, has_text: bool = True, ok: bool = T
     if event == "push":
         if status is None:
             return Transition("QUEUED" if has_text else "EMPTY", None)
-        return Transition("QUEUED" if has_text else "EMPTY", None)
+        return Transition("QUEUED", None)
+    if event == "metadata":
+        return Transition(status or "", reason)
     if event == "claim":
         if status != "QUEUED":
             return Transition(status or "", None, "NOT_QUEUED")

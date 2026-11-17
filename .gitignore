@@ -3,5 +3,6 @@
 __pycache__/
 *.pyc
 .kbindex-sync.json
+.pytest_cache/
 
 kbindex.egg-info/
