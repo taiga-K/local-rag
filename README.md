@@ -48,13 +48,18 @@ curl -s -X POST http://127.0.0.1:43123/api/v1/retrieve \
 
 ## ベンチマークの入口
 
-ハーネスが使う入口は次の 2 つだけである。
+ハーネスは次の 2 つを使う。
 
-1. `kbindex-ingest load --kb demo --jsonl corpus.jsonl --api http://127.0.0.1:43123`
-   1 行は `{"externalRecordId","recordName","text","version"}` である。同じ投入は `POST /api/v1/kb/{kb_id}/records` を 1 件ずつ呼んでもよい。
-2. `POST /api/v1/retrieve`
+1. `POST /api/v1/kb/{kb_id}/records`。`mimeType` は `application/blocks`、`blocksFormat` は 1、テキストブロックを置く。`externalRecordId` は `^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$` である。
+2. `POST /api/v1/retrieve`。ボディは `{"query","limit","rewriteQuery":false,"maxChunksPerRecord":1,"filters":{"kb":["<kb_id>"]}}` である。各チャンクの `record.recordId` は、その push の `externalRecordId` である。該当が無ければ `{"chunks":[],"incomplete":false}` である。
 
-まとめて入れる HTTP は無い。完了は push の `indexingStatus` ではなく、`GET /api/v1/kb/{kb_id}/indexing/counts` の `QUEUED` と `IN_PROGRESS` が 0 になるまで待つ。
+`kbindex-ingest load` は同じ push を JSONL から繰り返す。完了は `GET /api/v1/kb/{kb_id}/indexing/counts` の `QUEUED` と `IN_PROGRESS` が 0 になるまで待つ。
+
+指紋が違うベクトルが残っているあいだ、検索は 400 `INDEX_CONFIG_MISMATCH` である。入れ直しは次の 1 コマンドである。
+
+```bash
+curl -sS -X POST http://127.0.0.1:43123/api/v1/index/reindex
+```
 
 `scripts/measure.py` は `--run` を付け、API が応答するときだけ計測する。付けないときは終了コード 2 で、時間は出さない。
 

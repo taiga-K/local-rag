@@ -1,8 +1,8 @@
 """Benchmark harness contract.
 
 The harness pushes one text block and queries with rewriteQuery false,
-maxChunksPerRecord 1, and filters.kb. record.recordId must be the push
-response recordId or the externalRecordId. An unknown kb returns chunks [].
+maxChunksPerRecord 1, and filters.kb. record.recordId equals the pushed
+externalRecordId. An unknown kb returns chunks [].
 
 Principle: behavior the harness observes over HTTP.
 PipesHub has no retrieve e2e (test_viewpoints.md gap 1). The closest file is
@@ -85,7 +85,7 @@ def test_harness_push_and_retrieve_shape():
     assert found["chunks"]
     ids = []
     for chunk in found["chunks"]:
-        assert chunk["record"]["recordId"] in {external, pushed["recordId"]}
+        assert chunk["record"]["recordId"] == external
         assert "図書館" not in chunk["text"]
         ids.append(chunk["record"]["recordId"])
     assert len(ids) == len(set(ids))

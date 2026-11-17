@@ -204,7 +204,7 @@ PipesHub に Sudachi のテストは無い。RRF の定数と式の参照は `ba
 | ヒット無し | 200 `chunks: []` |
 | `maxChunksPerRecord: 1` で同じ文書が上位を占める | 返るチャンクはその文書から1つまで |
 | 応答のキー | `id` `text` `score` `record` `citation` が常にある |
-| フィンガープリント不一致 | 409 `INDEX_CONFIG_MISMATCH`。reindex のあと 200 |
+| フィンガープリント不一致 | 400 `INDEX_CONFIG_MISMATCH`。メッセージに `POST /api/v1/index/reindex` がある。そのあと 200 |
 
 ## デバッグ
 

@@ -2,7 +2,7 @@
 
 参照コミットは [pipeshub-ai/pipeshub-ai@7aff0de37be83beac220e801b83e303bd4018911](https://github.com/pipeshub-ai/pipeshub-ai/tree/7aff0de37be83beac220e801b83e303bd4018911) である。この文書は実装の契約である。コードよりこちらを優先する。
 
-要件アーカイブ `uploads/rag_research.tar.gz` は、この実行環境のディスクに存在しなかった。`/workspace/uploads/rag_research.tar_3111.gz` は Read が拡張子で拒否し、シェルからはパス自体が見えなかった。したがって `rag_requirements.md` ほかのノートは未読である。オーナーの依頼文と、上記コミットのソースで決まっていることだけを採用する。ノートにしか無い判断は「未決」に置く。
+要件ノートは `uploads/` の個別ファイルとして読んだ。閉じた判断、暫定、未決は末尾に分ける。
 
 LLM は置かない。回答生成、クエリ書き換え、分類、固有表現抽出はしない。
 
@@ -162,7 +162,7 @@ DTO は閉じた許容リストである。`extra` は拒否、数値と真偽�
 
 Postgres へ書けなければ 503 `POSTGRES_UNAVAILABLE` で、行は残さない。Redis へ流せなければ、行の書き込みを戻して 503 `REDIS_UNAVAILABLE` を返す。同じボディの再送は新規になる。Qdrant が止まっていても push は受け付ける。索引はワーカーが `FAILED` と理由 `QDRANT_UNAVAILABLE` にする。
 
-フィンガープリントが保存済みの索引世代と違うとき、push は保存まで行うが `indexingStatus` を `QUEUED` のままにし、`event` は出さない。検索は 409 `INDEX_CONFIG_MISMATCH` である。`POST /api/v1/index/reindex` が世代を切り替え、全部を `QUEUED` に戻してから流す。
+指紋が保存済みと違い点が残っているとき、検索は 400 `INDEX_CONFIG_MISMATCH` である。`POST /api/v1/index/reindex` が世代を切り替え、全部を `QUEUED` に戻してから流す。
 
 ### スキーマ
 
@@ -180,7 +180,7 @@ PipesHub の `PropertyDefinition` にある `filterable` や `semanticLabel` は
 
 ### 索引の観察
 
-ノート `ingest_inspection_ui.md` は未読である。PipesHub の画面が実際に読んでいるのは、レコードの `indexingStatus` と失敗理由、およびステータス別件数である（`frontend/app/(main)/knowledge-base/components/kb-list-view.tsx` と `backend/python/app/api/routes/local_repos.py` の `_indexing`）。パス文字列はノートにしか無い可能性があるので、未決に残す。実装は次のパスでその項目を返す。ノートが別パスを指定していたら、パスだけ合わせる。
+`ingest_inspection_ui.md` は画面の項目（状態、失敗理由、状態別件数、再処理）を決める。PipesHub のパスは知識ベース画面と `GET /api/v1/connectors/:id/stats`、`POST /api/v1/records/{id}/reindex` である。自作のパスはノートが指定していないので未決のまま、次の API で同じ項目を返す。
 
 `GET /api/v1/kb/{kb_id}/records/{external_record_id}`
 
@@ -229,7 +229,7 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
 
 権限フィルタ、ユーザー、コネクタ許可は無い。日付が壊れていれば 400 である。
 
-フィンガープリントが不一致なら 409 `INDEX_CONFIG_MISMATCH` である。Qdrant が落ちていれば 503 `QDRANT_UNAVAILABLE` である。Postgres が落ちていれば 503 `POSTGRES_UNAVAILABLE` である。
+指紋が不一致で点が残っていれば 400 `INDEX_CONFIG_MISMATCH` である。メッセージは `POST /api/v1/index/reindex` を一つの操作として示す。Qdrant が落ちていれば 503 `QDRANT_UNAVAILABLE` である。Postgres が落ちていれば 503 `POSTGRES_UNAVAILABLE` である。
 
 成功は 200 である。
 
@@ -241,7 +241,7 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
       "text": "...",
       "score": 0.0327,
       "record": {
-        "recordId": "...",
+        "recordId": "doc-1",
         "name": "案内",
         "connector": "demo",
         "mimeType": "application/blocks",
@@ -347,7 +347,7 @@ PipesHub は push の正規化バイトをドキュメントストレージに�
 
 ペイロードは `chunkId`、`recordId`、`kbId`、`blockIndex`、`piece`、`text`、`recordName`、`mimeType`、`sourceModifiedMs` である。
 
-点が1件でもあるあいだ、別の埋め込みモデルへの変更は 400 で拒否する。文言は PipesHub の `health.py` に合わせ、「Embedding model cannot be changed while the vector store contains data indexed with a different model. Please remove existing indexed documents first, then change the embedding model.」である。根拠は `embedding_switch_docs.md` と `gui_settings_scope.md` である。空ならコレクションを新しい次元で作り直す。入れ直しは自動では走らない。`POST /api/v1/index/cleanup` で点を消してから設定を変え、`POST /api/v1/index/reindex` で入れ直す。キーワード方式の変更も同じである。点が残っているあいだは 400 `INDEX_CONFIG_MISMATCH` を返し、設定は切り替わらない。
+指紋が保存済みと違い、Qdrant に点が残っているあいだ、検索は 400 `INDEX_CONFIG_MISMATCH` である。メッセージは、再索引するまで 400 のままであり、一つの操作は `POST /api/v1/index/reindex` だと書く。その操作がコレクションを消し、新しい指紋を記録し、全文のあるレコードを `QUEUED` にする。空のコレクションは新しい次元で作り直す。根拠は `embedding_switch_docs.md` と `gui_settings_scope.md` である。自動では入れ直さない。
 
 ### Redis Streams
 
@@ -392,7 +392,7 @@ bm25:
   b: 0.75
 ```
 
-モデルのライセンスは Apache-2.0 である（モデルカード）。`device` は `cpu` または `cuda` だけである。クエリと文書で同じモデルを使う。前置句は付けない。モデルカードがクエリと文書で異なる前置を要求するかは未決である。カードの先は未読で、検索品質に効く。
+モデルのライセンスは Apache-2.0 である（モデルカード）。`device` は `cpu` または `cuda` だけである。文書には `検索文書: `、クエリには `検索クエリ: ` を付ける。これはモデルカードの暫定であり、末尾の未決に残す。
 
 ## キーワード
 

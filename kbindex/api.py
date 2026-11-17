@@ -86,8 +86,9 @@ _FILTER_KEYS = {
     "selectionApps",
 }
 _MODEL_CHANGE = (
-    "Embedding model cannot be changed while the vector store contains data indexed with a different model. "
-    "Please remove existing indexed documents first, then change the embedding model."
+    "Index settings changed while vectors from the previous fingerprint are still stored. "
+    "Search returns 400 INDEX_CONFIG_MISMATCH until those vectors are rebuilt. "
+    "One command: POST /api/v1/index/reindex"
 )
 
 

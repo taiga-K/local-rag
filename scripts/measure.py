@@ -14,16 +14,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import statistics
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 API = "http://127.0.0.1:43123"
-DOCS = 8
 WARMUP = 1
-MEASURED = 5
+MEASURED = 20
+SAMPLES = Path("samples")
 
 
 def _request(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
@@ -56,56 +56,72 @@ def main() -> None:
         print("API did not answer; refusing to invent timings", file=sys.stderr)
         raise SystemExit(2) from exc
     print("model load is excluded: this process does not start the server", flush=True)
-    _request("POST", "/api/v1/kb", {"id": "measure", "name": "measure"})
+    kb = "samples"
+    _request("POST", "/api/v1/kb", {"id": kb, "name": kb})
+    files = sorted(SAMPLES.glob("*"))
+    files = [path for path in files if path.suffix.lower() in {".txt", ".md", ".html"}]
+    if not files:
+        print("no sample files", file=sys.stderr)
+        raise SystemExit(2)
     started = time.perf_counter()
-    for index in range(DOCS):
+    for path in files:
+        external = "s" + path.stem
         _request(
             "POST",
-            "/api/v1/kb/measure/records",
+            f"/api/v1/kb/{kb}/records",
             {
-                "recordName": f"m{index}",
+                "recordName": path.name,
                 "mimeType": "application/blocks",
-                "externalRecordId": f"m{index}",
-                "version": 1,
+                "externalRecordId": external,
+                "version": int(time.time() * 1000),
                 "blocksFormat": 1,
-                "blocks": {"blocks": [{"index": 0, "type": "text", "data": f"計測文書{index}。東京都の天気は晴れです。"}]},
+                "blocks": {"blocks": [{"index": 0, "type": "text", "data": path.read_text(encoding="utf-8")}]},
             },
         )
     deadline = time.perf_counter() + 600
     while time.perf_counter() < deadline:
-        _status, counts = _request("GET", "/api/v1/kb/measure/indexing/counts")
-        if counts.get("QUEUED", 1) == 0 and counts.get("IN_PROGRESS", 1) == 0:
+        _status, counts = _request("GET", f"/api/v1/kb/{kb}/indexing/counts")
+        if counts.get("QUEUED", 1) == 0 and counts.get("IN_PROGRESS", 1) == 0 and counts.get("FAILED", 1) == 0:
             break
-        time.sleep(0.5)
+        time.sleep(0.05)
     else:
         print(f"index did not finish: {counts}", file=sys.stderr)
         raise SystemExit(2)
     indexed = time.perf_counter() - started
     tokens = 0
-    for index in range(DOCS):
-        _status, debug = _request("GET", f"/api/v1/debug/kb/measure/records/m{index}")
-        tokens += sum(int(chunk["tokenCount"]) for chunk in debug.get("chunks", []))
+    for path in files:
+        _status, debug = _request("GET", f"/api/v1/debug/kb/{kb}/records/s{path.stem}")
+        tokens += sum(int(chunk.get("tokenCount") or chunk.get("token_count") or 0) for chunk in debug.get("chunks", []))
+    query = {"query": "東京の天気", "limit": 10, "rewriteQuery": False, "maxChunksPerRecord": 1, "filters": {"kb": [kb]}}
     for _ in range(WARMUP):
-        _request("POST", "/api/v1/retrieve", {"query": "東京の天気", "filters": {"kb": ["measure"]}})
+        _request("POST", "/api/v1/retrieve", query)
     latencies = []
     for _ in range(MEASURED):
         began = time.perf_counter()
-        _request("POST", "/api/v1/retrieve", {"query": "東京の天気", "filters": {"kb": ["measure"]}})
+        _request("POST", "/api/v1/retrieve", query)
         latencies.append(time.perf_counter() - began)
+    ordered = sorted(latencies)
+    def pct(p: float) -> float:
+        rank = min(len(ordered) - 1, max(0, int(round(p * (len(ordered) - 1)))))
+        return ordered[rank]
     print(
         json.dumps(
             {
-                "docs": DOCS,
+                "docs": len(files),
+                "files": [path.name for path in files],
                 "token_count": tokens,
                 "warmup": WARMUP,
                 "measured": MEASURED,
                 "index_seconds": indexed,
+                "docs_per_second": len(files) / indexed if indexed else None,
                 "retrieve_seconds": {
-                    "min": min(latencies),
-                    "max": max(latencies),
-                    "median": statistics.median(latencies),
+                    "p50": pct(0.50),
+                    "p95": pct(0.95),
+                    "min": ordered[0],
+                    "max": ordered[-1],
                 },
                 "model_load": "excluded",
+                "poll_seconds": 0.05,
             },
             ensure_ascii=False,
         )

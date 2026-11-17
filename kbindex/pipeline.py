@@ -390,7 +390,7 @@ class Engine:
             "text": row["text"],
             "score": score,
             "record": {
-                "recordId": str(row["record_id"]),
+                "recordId": row["external_record_id"],
                 "name": row["record_name"],
                 "connector": row["kb_id"],
                 "mimeType": "application/blocks",
