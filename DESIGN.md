@@ -221,7 +221,7 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
 | フィールド | 既定 | 制約 |
 | --- | --- | --- |
 | `query` | 必須 | 1 文字以上。空白だけは 400 |
-| `limit` | 8 | 1 から 50 |
+| `limit` | 10 | 1 から 10 |
 | `filters` | `{}` | オブジェクト。PipesHub の公開キーは `apps`、`kb`、`recordGroups`、`records`、`recordsExact`、`entityFilters` である（`modules/retrieval/filter_schema.py`）。このシステムで結果を変えるのは `kb` だけである。値は知識ベース id の配列である。権限用のキー（`allowedApps` など）は受け取り、捨てる。それ以外の未知キーは 400 |
 | `createdAfter` `createdBefore` `modifiedAfter` `modifiedBefore` | なし | `YYYY-MM-DD` またはオフセット付き ISO 8601。両端を含む |
 | `maxChunksPerRecord` | なし | 1 から 50 |
@@ -339,14 +339,15 @@ PipesHub は push の正規化バイトをドキュメントストレージに�
 - 距離 cosine（`CollectionConfig.distance_metric` の既定）
 - 次元はモデルの `hidden_size`。`cl-nagoya/ruri-v3-310m` の config は 768 である（2026-11-17 に Hugging Face の `config.json` を取得して確認した）
 - `on_disk` のベクトルと HNSW は true
-- 量子化は scalar
+- 量子化は scalar（INT8、quantile 0.95）
 - `optimizers_config.default_segment_number` は 8
+- HNSW の `ef_construct` は 256。検索時の `ef` は 256。量子化の oversampling は 1.5。`gui_settings_scope.md`（PipesHub `acc309552f12c960020431763c627040281717d1`）の表と、`qdrant.py` の `QDRANT_HNSW_EF_CONSTRUCT`、`qdrant/utils.py` の `QDRANT_HNSW_EF` と `QDRANT_OVERSAMPLING` である
 
 疎ベクトルは作らない。PipesHub の疎ベクトルは fastembed の BM25 である（`CollectionConfig.enable_sparse`）。キーワード側は Sudachi と文字バイグラムの別索引に置き換える。これは逸脱である。
 
 ペイロードは `chunkId`、`recordId`、`kbId`、`blockIndex`、`piece`、`text`、`recordName`、`mimeType`、`sourceModifiedMs` である。
 
-モデルを変えると次元が変わり得る。世代が違うあいだは検索しない。reindex はコレクションを削除して作り直す。
+点が1件でもあるあいだ、別の埋め込みモデルへの変更は 400 で拒否する。文言は PipesHub の `health.py` に合わせ、「Embedding model cannot be changed while the vector store contains data indexed with a different model. Please remove existing indexed documents first, then change the embedding model.」である。根拠は `embedding_switch_docs.md` と `gui_settings_scope.md` である。空ならコレクションを新しい次元で作り直す。入れ直しは自動では走らない。`POST /api/v1/index/cleanup` で点を消してから設定を変え、`POST /api/v1/index/reindex` で入れ直す。キーワード方式の変更も同じである。点が残っているあいだは 400 `INDEX_CONFIG_MISMATCH` を返し、設定は切り替わらない。
 
 ### Redis Streams
 
@@ -397,9 +398,11 @@ bm25:
 
 Sudachi は分割モード C である。`normalize: true` のとき、語の表記は `normalized_form` である。false のとき `surface` である。品詞では落とさない。空文字の正規化形は捨てる。
 
-文字バイグラムの定義は依頼文に無い。仮の規定を「未決」に書き、実装はその仮で動く。仮は、NFKC のあと、空白と制御文字を除いた符号点列の、隣り合う2点である。1点しか無ければ語は無い。
+文字バイグラムは未決の暫定である。NFKC、小文字化、空白と制御文字を除いた符号点の隣り合う2点である。1点しか無ければ語は無い。
 
-BM25 は Okapi である。`k1` と `b` は問い合わせ時の係数で、上の仮の既定を使う。転置索引は語と文書頻度と tf だけを持つ。
+文書の埋め込みには `検索文書: ` を、クエリには `検索クエリ: ` を付ける。モデルカードの暫定である。
+
+BM25 は Okapi である。`k1` は 1.2、`b` は 0.75 で、どちらも暫定である。転置索引は語と文書頻度と tf だけを持つ。
 
 問い合わせも同じトークナイザにかける。トークナイザごとに順位リストを1本作る。密ベクトルの順位リストを加え、RRF で融合する。
 
@@ -457,15 +460,20 @@ BM25 は Okapi である。`k1` と `b` は問い合わせ時の係数で、上�
 - 融合は検索器ごとの和である。PipesHub のコレクション間融合は最大寄与である。
 - HTTP の `application/blocks` も Content-Type として許す。PipesHub の検査は `application/json` だけである。
 
+## ノートで閉じた判断
+
+`rag_requirements.md`（taiga、2026-11-18 承認）が次を決めている。Sudachi モード C と `normalize: true`、RRF の k=60、チャンク方針 B、リランカ無し、Qdrant、Postgres、Redis Streams、ruri-v3-310m、モデル変更とキーワード方式の変更は全件入れ直し。`normalize: true` は Sudachi の `normalized_form` とする。`rag_sparse_compare.md` の表 A が「Sudachi C 単位 内容語＋正規化形」をその名前で測っている。内容語への絞り込みはノートが決めていないので、品詞では落とさない。
+
+`gui_settings_scope.md`（PipesHub `acc3095`）が次を決めている。HNSW `ef` 256、oversampling 1.5、検索画面の件数 10。retrieve の上限は、この依頼が「既定 10、上限 10」と指定したので 10 にする。PipesHub の `RetrieveQuery` 自体は既定 8、上限 50 である（`search.py`）。埋め込みモデルは、点が残っているあいだ変更できない（`embedding_switch_docs.md`）。
+
 ## 未決
 
-要件ノートがディスクに無く、次はソースからも依頼文からも一意に決まらない。実装は仮を置くが、仮は要件ではない。
+ノートが決めていないものだけを残す。仮はベンチマークが確かめるための暫定であり、要件ではない。
 
-1. `rag_requirements.md`、`undecided_components.md`、`neo4j_vs_arangodb.md`、`embedding_switch_docs.md`、`japanese_support.md`、`rag_*_compare.md`、`kb_push_api.md`、`ingest_inspection_ui.md` の本文。アーカイブが届いたら、この文書と違う箇所はノートを優先して直す。
-2. 索引観察 API のパス。ソースで見つかった PipesHub のルートは、件数は `GET /api/v1/stats?connector_id=`（`stats.indexingStatus`）、1件の状態と理由は知識ハブの `indexingStatus` と `reason`、再実行は `POST /api/v1/records/{record_id}/reindex` である。`reprocess` というルートは無い。知識ハブの `include=counts` は節点種別の件数であり、状態別ではない。ノート `ingest_inspection_ui.md` は未読なので、画面がこの3本以外を呼んでいる可能性は残る。こちらは外部 id の GET と `indexing/counts` と `reprocess` を置き、再実行だけ PipesHub と同じ `/api/v1/records/{record_id}/reindex` も受ける。選択肢は、この仮を維持する、件数を `/api/v1/stats` に改名する、知識ハブのノード一覧を足す、である。
-3. 文字バイグラムの前処理。依頼文はトークナイザ名だけである。仮は NFKC のあと空白と制御文字を除いた隣接受符点である。選択肢は、生の符号点をすべて使う、空白だけ除く、Sudachi の語の中だけでバイグラムを切る、である。変わると再索引が要る。
-4. `normalize: true` の意味。仮は Sudachi の `normalized_form` である。選択肢は、それ、`dictionary_form`、Unicode NFKC を表層に掛ける、である。
-5. BM25 の `k1` と `b`。依頼文に無い。仮は 1.2 と 0.75 で、フィンガープリントには入れない。選択肢は、この仮、フィンガープリントに入れて再索引必須にする、である。係数は順位を変えるが転置索引の中身は変えない。
-6. `ruri-v3-310m` のクエリ前置。モデルカードの使用例の続きは未読である。前置が必要なら、文書とクエリで同じ操作をしないと検索がずれる。選択肢は、前置なし（仮）、カードの指定に従う、である。
-7. 融合方式を `rrf` 以外にしたときの意味。枠だけあり、実装は起動時に拒否する。選択肢は、拒否を維持する、方式を足して再索引必須にする、である。
-8. 表の行を1点にまとめる PipesHub 方針 C を、方針 B の長いブロック分割と一緒に使うか。依頼文は方針 B だけを名指ししている。仮は行をテキストとして方針 B で切る。選択肢は、その仮、行をまとめない、方針 C の行グループを足す、である。
+1. 索引観察 API のパス。`ingest_inspection_ui.md` は画面の項目を決め、PipesHub のルートは `GET /api/v1/knowledgeBase/record/:recordId`、`GET /api/v1/connectors/:id/stats`、`POST /api/v1/records/{id}/reindex` である。自作側のパスは指定していない。仮は外部 id の GET、`GET /api/v1/kb/{kb_id}/indexing/counts`、`POST .../reprocess` と `POST /api/v1/records/{record_id}/reindex` である。選択肢は、この仮を維持する、件数を `/api/v1/stats` に改名する、知識ハブのノード一覧を足す、である。
+2. 文字バイグラムの前処理。要件はトークナイザ名だけである。`rag_sparse_compare.md` の表 A は NFKC と小文字化のあとでバイグラムを切っているが、それは比較記事の条件である。暫定は NFKC、小文字化、空白と制御文字を除いた隣接受符点である。選択肢は、生の符号点、空白だけ除く、Sudachi の語の中だけ、である。変わると再索引が要る。
+3. BM25 の `k1` と `b`。要件に無い。暫定は Okapi の標準であり fastembed `Qdrant/bm25` の既定でもある 1.2 と 0.75 である（`undecided_components.md` の項目 12、`fe_bm25_37c7.py`）。フィンガープリントには入れない。ベンチマークが確かめる。
+4. ruri-v3 の接頭辞。モデルカード（`cl-nagoya/ruri-v3-310m` の README、2026-11-17 取得）は、検索クエリに `検索クエリ: `、文書に `検索文書: ` を付ける。暫定はカードどおり文書とクエリで分ける。PipesHub の埋め込みサーバーは query と passage に同じ文字列を渡す（`japanese_support.md`）。ベンチマークが確かめる。
+5. 融合方式を `rrf` 以外にしたときの意味。枠だけあり、実装は起動時に拒否する。選択肢は、拒否を維持する、方式を足して再索引必須にする、である。
+6. Redis のレーン数。PipesHub の既定は 8（`undecided_components.md` の項目 24）。要件は Streams とだけ書いている。暫定はレーン 1 である。
+7. 表を方針 C のように行グループにするか。要件は方針 B だけを名指ししている。暫定は行をテキストとして方針 B で切る。LLM による `table_summary` の上書きはしない。

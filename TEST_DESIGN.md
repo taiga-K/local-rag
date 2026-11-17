@@ -6,17 +6,35 @@
 
 PipesHub の参照コミットは `7aff0de37be83beac220e801b83e303bd4018911` である。リンクの根は `https://github.com/pipeshub-ai/pipeshub-ai/blob/7aff0de37be83beac220e801b83e303bd4018911/` である。以下、パスだけ書く。
 
-要件ノートのアーカイブはこの環境に無く、PipesHub テスト観点の別要約も未着である。届いたらケースを足す。待たない。
+テスト観点は `test_viewpoints.md`（静的読取、テスト未実行、コミット `7aff0de`）に従う。件数はそこの `def test_` の数であり、parametrize 展開後の数ではない。
 
 ## ピラミッド
 
-| 層 | 数の目安 | 依存 | 見るもの |
-| --- | --- | --- | --- |
-| 単体 | 多い | なし | チャンク境界、Sudachi とバイグラム、BM25 の得点、RRF の順位、version 判定の純粋関数 |
-| 統合 | 少ない | compose の Postgres、Redis、Qdrant | push の永続化、ストリーム再配送、索引の点とポスティング |
-| 端到端 | 数本 | compose 全部とモデル | サンプルファイルを CLI で入れ、日本語の問いでチャンクが返る |
+PipesHub は単体で実 DB を使わない。fakeredis と `tests/support/in_memory_vector_db.py`、`tests/support/fake_kafka.py` で置き換える。実 Qdrant と Redis は `.github/workflows/backend-matrix.yml` の compose で流す。`integration-tests/` はスタック全体への HTTP である。こちらも同じ3層にする。
 
-単体のチャンクと RRF はモデルをロードしない。端到端だけ `ruri-v3-310m` を使う。統合の埋め込みは、決まったベクトルを返す偽の埋め込み関数に差し替える。差し替え点はプロセスの設定 `embedding.backend: fake` である。本番の既定は `sentence-transformers` である。偽はテスト用設定で、本番イメージの既定値は変えない。
+| 層 | 数の目安 | 依存 | 見るもの | モデルにした置き方 |
+| --- | --- | --- | --- | --- |
+| 単体 | 多い | なし。Redis は fakeredis。ベクトルはメモリの偽 | チャンク境界、Sudachi とバイグラム、BM25、RRF、version 判定、状態機械 | `tests/support/in_memory_vector_db.py`、`fake_kafka.py`、fakeredis |
+| 統合 | 少ない | compose の Postgres、Redis、Qdrant。埋め込みは偽 | push の永続化、同じ鍵の競合、ストリーム再配送、実 Qdrant への密検索と BM25 融合 | `backend-matrix.yml`、`tests/integration/vector_db/test_qdrant_integration.py` |
+| 端到端 | 数本 | compose 全部。1本だけ実モデル | CLI で入れ、`POST /api/v1/retrieve` が日本語のチャンクを返す | `integration-tests/` の HTTP e2e。PipesHub に retrieve の e2e は無い |
+
+単体はモデルをロードしない。統合の埋め込みは `embedding.backend: fake` である。本番の既定は `sentence-transformers` である。`pytest -m slow` の1本だけ `ruri-v3-310m` を CPU でロードする。既定の `pytest` は slow を集めない。
+
+手元でサーバーが無い統合テストはスキップする。CI で統合を流すときはスキップを失敗にする。PipesHub の `backend-matrix.yml` がそうしている。`python-integration-offline` はスキップを許す。こちらは既定の pytest を unit だけにし、統合は `INTEGRATION=1` のときだけ集める。
+
+## PipesHub の穴と、こちらが埋めるテスト
+
+出典は `test_viewpoints.md` の 7 章。番号はそこの表である。3 は表要約の上書きで、LLM が無いこちらでは上書きしない。そのことを1本で固定する。
+
+| 穴 | PipesHub の根拠 | こちらで埋めるテスト | 層 |
+| --- | --- | --- | --- |
+| 1. `/api/v1/retrieve` の e2e が無い | `integration-tests` を `v1/retrieve` で探して 0 件。unit は `tests/unit/api/routes/test_retrieve.py`（18、`RetrievalService` は MagicMock）。品質 e2e は `integration-tests/retrieval/test_search_quality.py`（4、対象は `/api/v1/search`） | 起動した API に `POST /api/v1/retrieve` を送り、順位と `chunks[].text` を見る。スコアの閾値は置かない。`test_search_quality.py` の冒頭が「scores move with the model」と書いている | 端到端 |
+| 2. push から索引、検索までが無い | `tests/integration/graph_db/test_kb_push_real_backends.py` はストレージとブローカーが記録用フェイク（docstring L1-L5） | 同じ `externalRecordId` を push し、`COMPLETED` を待ち、retrieve でその本文が返る。削除したあとは返らない | 端到端 |
+| 3. push した表要約の上書き | `unit/utils/test_table_enrichment*.py` に push の語が無い | `table_row` の `cells` がチャンクに残り、別の要約で置き換わらない | 単体 |
+| 4. 実 Qdrant のハイブリッドが1本 | `tests/integration/vector_db/test_qdrant_integration.py` の `test_hybrid_sparse_dense_query`。RRF の論理は `tests/unit/modules/retrieval/test_result_merging.py`（26） | 実 Qdrant の密順位と、Postgres の BM25 順位を RRF で融合し、HTTP の `score` 順が手計算と一致する。疎ベクトルは作らない | 統合 |
+| 5. 埋め込みは PR では常に偽 | `tests/integration/vector_db/test_e2e_pipeline.py` L5-L8 の `FakeEmbedder`。本物は perf の cost-class だけ | `slow` の1本。短い日本語2件を実モデルで埋め、問いに対応する方が順位1。次元は 768 | 端到端、slow |
+| 6. 日本語の文分割が無い | `tests/unit/modules/parsers/test_text_splitting.py`（23）。言語は英語、スペイン語、ヒンディー語、中国語など。`ja` は無い | 「。」を含む文、空白の無い複合語、窓の境界の日本語1文字。方針 B なので文では切らず、トークン境界で切る。切った片を結合すると元に戻る | 単体 |
+| 7. `indexingStatus` の遷移表が無い | CAS は `tests/unit/services/graph_db/test_compare_and_set_indexing_status_errors.py`（4）。到達は `integration-tests/messaging/test_e2e_record_pipeline.py`（9）。組み合わせの表は無い | `DESIGN.md` の遷移表を1行1テストにする。`QUEUED`、`IN_PROGRESS`、`COMPLETED`、`FAILED`、`EMPTY`、reprocess、削除 | 単体の表と、統合で GET が同じ状態を返すこと |
 
 ## 技法
 
@@ -32,12 +50,12 @@ PipesHub の参照コミットは `7aff0de37be83beac220e801b83e303bd4018911` で
 
 技法は同値分割と境界値分析とエラー網羅である。
 
-モデルにした PipesHub のテストは次である。
+モデルにした PipesHub のテストは次である。件数は `test_viewpoints.md` 2.1 節。
 
-- `backend/python/tests/unit/connectors/sources/localKB/push/test_contract.py`
+- `backend/python/tests/unit/connectors/sources/localKB/push/test_contract.py`（34。同値な JSON は同じ digest、version の両端、深さ 64、壊れた JSON、422 の位置）
+- `backend/python/tests/unit/connectors/sources/localKB/push/test_router.py`（41。201、415、413、408、429、503）
+- `backend/python/tests/unit/connectors/sources/localKB/push/test_structure.py`（42）
 - `backend/python/tests/unit/connectors/sources/localKB/push/bodies.py`
-- `backend/python/tests/unit/connectors/sources/localKB/push/test_router.py`
-- `backend/python/app/connectors/sources/localKB/push/admission.py` の上限
 
 | 類または境界 | 入力の例 | 観察 |
 | --- | --- | --- |
@@ -70,7 +88,7 @@ PipesHub の参照コミットは `7aff0de37be83beac220e801b83e303bd4018911` で
 
 技法はデシジョンテーブルである。
 
-モデルは `backend/python/tests/integration/graph_db/test_kb_push_real_backends.py` の `test_create_publishes_one_new_record`、`test_identical_push_writes_nothing`、`test_changed_content_new_document_then_update`、`test_rename_only_push_does_not_reindex` である。409 の理由文字列は `push/service.py` の `_decide` である。
+モデルは `backend/python/tests/integration/graph_db/test_kb_push_real_backends.py`（28）の `test_create_publishes_one_new_record`、`test_identical_push_writes_nothing`、`test_hundred_identical_pushes`、`test_changed_content_new_document_then_update`、`test_rename_only_push_does_not_reindex` である。409 の理由は `push/service.py` の `_decide` である。同じ鍵の同時 push は `test_kb_push_concurrency_real_backends.py`（4、`race_two_services`）である。失った書き込みの回収は `test_kb_push_retry_real_backends.py`（6）と `tests/unit/connectors/sources/localKB/push/test_service_heal.py`（11）である。
 
 | 操作 | 観察 |
 | --- | --- |
@@ -81,6 +99,8 @@ PipesHub の参照コミットは `7aff0de37be83beac220e801b83e303bd4018911` で
 | より大きい version、同じブロック、名前だけ違う | 200 `updated`、`contentChanged` false。チャンクのテキストは変わらない |
 | より大きい version、違う本文 | 200 `updated`、`contentChanged` true、`event` `updateRecord`。検索は新しいテキストだけを返す |
 | 100 回の同一 push | 保存ファイルは1つのまま。イベントは最初の1回だけ |
+| 同じ鍵への同時 push | 最終行は1つ。version は勝った要求のもの。409 か 200 か 201 だけで、500 にはしない |
+| 保存ファイルが欠ける同一 push | 200 のままにせず、ファイルを作り直す。検索に本文が戻る |
 
 ## 削除と再投入
 
@@ -141,6 +161,9 @@ PipesHub の参照コミットは `7aff0de37be83beac220e801b83e303bd4018911` で
 | 画像ブロック | チャンクは0。デバッグ API のブロック一覧には残る |
 | 表の行 | `cells` のテキストがチャンクに含まれる |
 | ブロックが2つ | `blockIndex` は 0 と 1。長い方だけ `piece` が増える |
+| 日本語の「。」 | 方針 B は「。」では切らない。窓に収まる文は1チャンクのまま |
+| 空白の無い複合語 | Sudachi C の語と、文字バイグラムの両方が索引語になる |
+| 窓の境界の日本語1文字 | 片は文字の途中で割れない。結合すると元の文字列になる |
 
 トークナイザはテスト用の単文字トークナイザと、モデルをロードしない固定窓で行う。端到端ではモデルの `max_seq_length` で1本だけ、長い日本語が2片以上になり、片のトークン数が窓以下であることを見る。
 
@@ -170,8 +193,8 @@ PipesHub に Sudachi のテストは無い。RRF の定数と式の参照は `ba
 | ケース | 観察 |
 | --- | --- |
 | 空の `query`、空白だけ | 400 |
-| `limit` が 0、51 | 400 または 422。PipesHub は pydantic の範囲エラーである。ここは 422 に固定する |
-| `limit` が 1 と 50 | 件数がその数以下 |
+| `limit` が 0、11 | 422。既定は 10、上限は 10（`gui_settings_scope.md` の検索画面と、この依頼の指定）。PipesHub の `RetrieveQuery` は既定 8、上限 50 で、`test_retrieve.py` がその上限を見ている |
+| `limit` が 1 と 10 | 件数がその数以下 |
 | `filters` に未知キー | 400 |
 | `filters.kb` が id の配列 | その知識ベースのチャンクだけ |
 | `filters` の権限キー | 200。結果は絞られない |
