@@ -1,11 +1,15 @@
-"""Embeddings. The same model encodes documents and queries. No prefix.
+"""Embeddings. Document and query strings get the ruri-v3 card prefixes.
 
-The design leaves a query prefix undecided and tells the code to add none.
+Provisional until the benchmark checks them. The card uses 検索文書: for
+documents and 検索クエリ: for queries.
 """
 
 from __future__ import annotations
 
 import hashlib
+
+DOC_PREFIX = "検索文書: "
+QUERY_PREFIX = "検索クエリ: "
 
 
 class Embedder:
@@ -43,10 +47,10 @@ class FakeEmbedder(Embedder):
         return [item / norm for item in vec]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [self._unit(text) for text in texts]
+        return [self._unit(DOC_PREFIX + text) for text in texts]
 
     def embed_query(self, text: str) -> list[float]:
-        return self._unit(text)
+        return self._unit(QUERY_PREFIX + text)
 
     def token_spans(self, text: str) -> list[tuple[int, int]]:
         return [(index, index + 1) for index in range(len(text))]
@@ -61,11 +65,11 @@ class RuriEmbedder(Embedder):
         self.max_seq_length = int(self._model.max_seq_length)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        vectors = self._model.encode(texts, normalize_embeddings=True)
+        vectors = self._model.encode([DOC_PREFIX + text for text in texts], normalize_embeddings=True)
         return [list(map(float, row)) for row in vectors]
 
     def embed_query(self, text: str) -> list[float]:
-        row = self._model.encode([text], normalize_embeddings=True)[0]
+        row = self._model.encode([QUERY_PREFIX + text], normalize_embeddings=True)[0]
         return list(map(float, row))
 
     def token_spans(self, text: str) -> list[tuple[int, int]]:

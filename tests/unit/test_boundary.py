@@ -84,6 +84,14 @@ def test_retrieve_bounds():
     assert day["bounds"]["modified_before"].tzinfo is not None
 
 
+def test_query_and_document_prefixes_differ():
+    from kbindex.embed import FakeEmbedder
+
+    embedder = FakeEmbedder()
+    text = "東京都の天気"
+    assert embedder.embed_query(text) != embedder.embed_documents([text])[0]
+
+
 def test_fingerprint_ignores_device_and_bm25():
     cpu = _settings(device="cpu", bm25_k1=1.2)
     cuda = _settings(device="cuda", bm25_k1=2.0)

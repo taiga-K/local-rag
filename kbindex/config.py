@@ -39,6 +39,8 @@ class Settings:
             ",".join(sorted(self.tokenizers)),
             f"{self.sudachi_mode} {str(self.sudachi_normalize).lower()}",
             f"{self.fusion_method} {self.fusion_k}",
+            "検索文書: ",
+            "検索クエリ: ",
         ]
         return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
