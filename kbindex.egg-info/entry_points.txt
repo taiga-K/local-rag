@@ -1,4 +1,0 @@
-[console_scripts]
-kbindex-api = kbindex.api:main
-kbindex-ingest = kbindex.cli:main
-kbindex-worker = kbindex.worker:main
