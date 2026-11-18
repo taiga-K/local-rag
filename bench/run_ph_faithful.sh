@@ -56,14 +56,15 @@ run_one() {
     --kb "${slug}-ph" \
     --sanity-kb "${slug}-ph-sanity" \
     --cache "$CACHE" \
+    --wait-seconds 14400 \
     --out "$out"
 }
 
-mkdir -p "$ROOT/bench/results/ph-faithful"
-for pair in "jqara-dev-s40 jqara" "miracl-ja-dev-s30 miracl" "jsquad-valid-s40 jsquad"; do
-  subset=${pair%% *}
-  slug=${pair##* }
-  wipe
+run_subset() {
+  local subset="$1" slug="$2" do_wipe="$3"
+  if [[ "$do_wipe" == wipe ]]; then
+    wipe
+  fi
   ensure_kb "${slug}-ph"
   ensure_kb "${slug}-ph-sanity"
   set_legs "[dense, fastembed]"
@@ -72,5 +73,14 @@ for pair in "jqara-dev-s40 jqara" "miracl-ja-dev-s30 miracl" "jsquad-valid-s40 j
   run_one B "$subset" "$slug"
   set_legs "[dense]"
   run_one C "$subset" "$slug"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+mkdir -p "$ROOT/bench/results/ph-faithful"
+for pair in "jqara-dev-s40 jqara" "miracl-ja-dev-s30 miracl" "jsquad-valid-s40 jsquad"; do
+  subset=${pair%% *}
+  slug=${pair##* }
+  run_subset "$subset" "$slug" wipe
 done
 echo "ALL_DONE $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
