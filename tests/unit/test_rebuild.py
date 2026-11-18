@@ -7,6 +7,7 @@ import redis
 from fastapi.testclient import TestClient
 
 from kbindex.api import create_app
+from kbindex.chunking import Piece
 from kbindex.config import load_settings
 from kbindex.embed import FakeEmbedder
 from kbindex.pipeline import Engine
@@ -332,6 +333,76 @@ def test_worker_does_not_claim_a_not_started_record():
     engine = Engine(load_settings(), DB(), None, FakeEmbedder())
     assert engine.index_record("kb", "doc-1", event_version=1, event_rev="rev") == "stale"
     assert "NOT_STARTED" not in seen[0]
+
+
+def test_finish_does_not_refill_a_collection_after_cleanup(monkeypatch):
+    """A QUEUED event that finishes after cleanup must not write points or COMPLETED."""
+    monkeypatch.setattr("kbindex.pipeline.document_weights", lambda _text: [("1", 1.0)])
+    upserts: list = []
+
+    class Vectors:
+        def delete_record(self, _record_id):
+            return None
+
+        def ensure(self, _dim):
+            return None
+
+        def upsert(self, points, expected_dim=None):
+            upserts.append(points)
+
+    class Result:
+        def __init__(self, row):
+            self._row = row
+            self.rowcount = 1
+
+        def fetchone(self):
+            return self._row
+
+    class Conn:
+        def __init__(self):
+            self.completed = False
+
+        def execute(self, sql, _params=None):
+            text = " ".join(sql.split())
+            if text.startswith("select") and "from records" in text:
+                return Result({"version": 1, "content_rev": "rev", "indexing_status": "NOT_STARTED"})
+            if "indexing_status = 'COMPLETED'" in text:
+                self.completed = True
+            return Result(None)
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    conn = Conn()
+
+    class DB:
+        def connect(self):
+            return conn
+
+    engine = Engine(load_settings(), DB(), Vectors(), FakeEmbedder())
+    engine.embedder.dim = 2
+    result = engine._finish_chunks(
+        "rid",
+        "kb",
+        {"record_name": "doc", "source_modified_ms": None},
+        [Piece(0, 0, "本文", 2)],
+        [[0.1, 0.2]],
+        1,
+        "rev",
+        {"blocks": []},
+    )
+    assert result == "stale"
+    assert upserts == []
+    assert conn.completed is False
 
 
 def test_upsert_rejects_a_vector_of_the_wrong_dimension():

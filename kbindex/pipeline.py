@@ -146,8 +146,16 @@ class Engine:
 
     def _finish_empty(self, rid, event_version: int, event_rev: str) -> str:
         with self.db.connect() as conn:
-            row = conn.execute("select version, content_rev from records where record_id = %s for update", (rid,)).fetchone()
-            if row is None or row["version"] != event_version or row["content_rev"] != event_rev:
+            row = conn.execute(
+                "select version, content_rev, indexing_status from records where record_id = %s for update",
+                (rid,),
+            ).fetchone()
+            if (
+                row is None
+                or row["version"] != event_version
+                or row["content_rev"] != event_rev
+                or row["indexing_status"] != "IN_PROGRESS"
+            ):
                 conn.rollback()
                 return "stale"
             delete_chunks_for(conn, rid)
@@ -199,7 +207,10 @@ class Engine:
             )
             sparse_docs[cid] = document_weights(piece.text)
         with self.db.connect() as conn:
-            row = conn.execute("select version, content_rev from records where record_id = %s for update", (rid,)).fetchone()
+            row = conn.execute(
+                "select version, content_rev, indexing_status from records where record_id = %s for update",
+                (rid,),
+            ).fetchone()
             if row is None:
                 conn.rollback()
                 try:
@@ -207,7 +218,7 @@ class Engine:
                 except QdrantUnavailable:
                     pass
                 return "gone"
-            if row["version"] != event_version or row["content_rev"] != event_rev:
+            if row["version"] != event_version or row["content_rev"] != event_rev or row["indexing_status"] != "IN_PROGRESS":
                 conn.rollback()
                 return "stale"
             try:
@@ -235,7 +246,7 @@ class Engine:
                 """
                 update records set indexing_status = 'COMPLETED', has_indexed_copy = true,
                   failure_reason = null, updated_at = now()
-                where record_id = %s and version = %s
+                where record_id = %s and version = %s and indexing_status = 'IN_PROGRESS'
                 """,
                 (rid, event_version),
             )
