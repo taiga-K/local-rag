@@ -529,6 +529,11 @@ taiga が寝ているあいだ、`rag_requirements.md` に無い細部は PipesH
 
 1. 決定: 融合前の候補深さは `max(limit * 2, 64)` にする。証拠: JQaRA の external id `4210070`（チャンク `db93f5c3-b144-506f-9287-ecf03b424228:0`）は Sudachi 順位 1、文字バイグラム順位 1、密順位 21 だった。`limit * 2` が 20 のとき密の枝に入らず、k=60 の RRF は `2/61` で融合順位 15 になり、ハーネスの上位 10 から外れた。密順位が 20 を超えた自己検索は 1999 件中 5 件で、最悪は 32, 32, 28, 24, 21。深さ 64 のあと、その 5 件の融合順位は 3, 1, 1, 4, 3 になった。戻し方: `branch_depth` を `return limit * 2` に戻す。
 2. 決定: BM25 の候補は、上位 N を切る前に `filters.kb` のポスティングだけを残す。文書頻度は全体のまま。証拠: クエリ「スイス連邦の首都はどこ？」の全体 Sudachi 上位 64 は、jsquad-k60 が 24、jqara-k60 が 22、miracl-k60 が 18 だった。密検索はもともと kb で絞る。`filters.kb` は、他の kb が候補枠を埋めないという意味である。この絞り込みのあと MIRACL の nDCG@10 は PipesHub+ruri に届いていない。品質の穴を埋めるための変更ではなく、フィルタの正しさである。戻し方: `bm25_rows` の kb 述語を外す。
+3. 決定: デスクトップのフォルダ、下位を含むか、自動索引は Postgres の `app_settings` 1 行に置く。証拠: PipesHub の Local FS は個人コネクタの設定であり、API コンテナからは利用者のディスクを読めない（`gui_settings_scope.md` の Local FS、`local_fs/connector.py` L466-L518）。戻し方: `app_settings` を消し、`GET/PUT /api/v1/settings/local` を外す。
+4. 決定: 自動索引がオフの新規本文は `AUTO_INDEX_OFF` になり、ワーカーへ流さない。再索引で `QUEUED` に戻す。証拠: Manual Indexing が ON のとき `AUTO_INDEX_OFF` になる（`local_fs/connector.py` L1351-L1356、`acc3095`）。戻し方: `hold_for_manual` を常に素通しにする。
+5. 決定: 埋め込みモデルの変更は、点が残っているあいだ 400 `INDEX_CONFIG_MISMATCH`。点が無いときだけ希望の名前を保存し、動いているプロセスは起動時のモデルのままにする。証拠: PipesHub は点が残っているあいだモデルを替えない（`embedding_switch_docs.md`）。こちらはモデルをプロセス起動時に読む。戻し方: `PUT /api/v1/engineer/embedding` を外す。
+6. 決定: アップロード上限は `app_settings.max_upload_bytes`。既定と上限は 16 MiB。エンジニア API だけが変える。証拠: Labs の `fileUploadMaxSizeBytes` は管理者専用（`gui_settings_scope.md`、`cm_controller.ts` L1046-L1095）。戻し方: `admit` の `limit` を外し、定数だけを見る。
+7. 決定: 全削除と全再埋め込みは `POST /api/v1/connectors/vector-store/cleanup` と `POST /api/v1/connectors/vector-store/reindex`。画面には出さない。証拠: Labs の同じ操作（`gui_settings_scope.md`、`POST /api/v1/connectors/vector-store/cleanup` と `reindex`）。戻し方: この2つの別名を外す。既存の `/api/v1/index/cleanup` と `/api/v1/index/reindex` は残る。
 
 ## 未決
 

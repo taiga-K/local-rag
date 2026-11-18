@@ -118,6 +118,17 @@ ALTERS = (
     "alter table bm25_stats add column if not exists avgdl double precision not null default 0",
     "alter table records add column if not exists embed_done int",
     "alter table records add column if not exists embed_total int",
+    """
+    create table if not exists app_settings (
+      id int primary key,
+      folders jsonb not null default '[]'::jsonb,
+      include_subfolders boolean not null default true,
+      auto_index boolean not null default true,
+      max_upload_bytes bigint not null default 16777216,
+      requested_model text
+    )
+    """,
+    "insert into app_settings (id) values (1) on conflict (id) do nothing",
 )
 
 
@@ -193,7 +204,7 @@ def lock_record(conn, record_id):
 
 
 def counts_for(conn, kb_id: str) -> dict[str, int]:
-    names = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY")
+    names = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "AUTO_INDEX_OFF")
     out = {name: 0 for name in names}
     rows = conn.execute(
         "select indexing_status, count(*) as n from records where kb_id = %s group by indexing_status",
@@ -203,6 +214,68 @@ def counts_for(conn, kb_id: str) -> dict[str, int]:
         if row["indexing_status"] in out:
             out[row["indexing_status"]] = int(row["n"])
     return out
+
+
+def app_settings_row(conn) -> dict[str, Any]:
+    row = conn.execute("select * from app_settings where id = 1").fetchone()
+    if row is None:
+        conn.execute("insert into app_settings (id) values (1) on conflict (id) do nothing")
+        row = conn.execute("select * from app_settings where id = 1").fetchone()
+    return dict(row)
+
+
+def save_local_settings(conn, *, folders: list[str], include_subfolders: bool, auto_index: bool) -> dict[str, Any]:
+    conn.execute(
+        """
+        update app_settings
+        set folders = %s::jsonb, include_subfolders = %s, auto_index = %s
+        where id = 1
+        """,
+        (json.dumps(folders), include_subfolders, auto_index),
+    )
+    return app_settings_row(conn)
+
+
+def save_upload_limit(conn, max_upload_bytes: int) -> dict[str, Any]:
+    conn.execute("update app_settings set max_upload_bytes = %s where id = 1", (max_upload_bytes,))
+    return app_settings_row(conn)
+
+
+def save_requested_model(conn, model: str) -> dict[str, Any]:
+    conn.execute("update app_settings set requested_model = %s where id = 1", (model,))
+    return app_settings_row(conn)
+
+
+def list_kbs(conn) -> list[dict[str, Any]]:
+    return list(conn.execute("select id, name from knowledge_bases order by id").fetchall())
+
+
+def list_record_status(conn, kb_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    return list(
+        conn.execute(
+            """
+            select record_id, external_record_id, record_name, indexing_status, failure_reason, version
+            from records where kb_id = %s
+            order by updated_at desc
+            limit %s
+            """,
+            (kb_id, limit),
+        ).fetchall()
+    )
+
+
+def queue_kb_records(conn, kb_id: str) -> list[dict[str, Any]]:
+    return list(
+        conn.execute(
+            """
+            update records
+            set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+            where kb_id = %s and indexing_status <> 'EMPTY'
+            returning record_id, kb_id, external_record_id, version, content_rev
+            """,
+            (kb_id,),
+        ).fetchall()
+    )
 
 
 def generation_row(conn):

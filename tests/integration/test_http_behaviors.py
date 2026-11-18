@@ -292,7 +292,7 @@ def test_inspection_paths():
     counts = stats["data"]["stats"]["indexingStatus"]
     assert stats["data"]["connectorId"] == kb
     assert stats["data"]["origin"] == "COLLECTION"
-    assert set(counts) == {"QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY"}
+    assert set(counts) == {"QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "AUTO_INDEX_OFF"}
     assert stats["data"]["stats"]["total"] == sum(counts.values()) == 1
     code, unknown = _call("GET", "/api/v1/connectors/missingkb/stats")
     _assert_error(code, unknown, "KB_NOT_FOUND")
@@ -306,7 +306,7 @@ def test_indexing_status_and_qdrant():
     assert status == 201
     _wait_status(kb, "main", {"COMPLETED"})
     _code, counts = _call("GET", f"/api/v1/kb/{kb}/indexing/counts")
-    assert set(counts) == {"QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY"}
+    assert set(counts) == {"QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "AUTO_INDEX_OFF"}
     assert counts["COMPLETED"] == 1
     assert sum(counts.values()) == 1
     with psycopg.connect(DSN, connect_timeout=3) as conn:

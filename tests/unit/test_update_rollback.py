@@ -41,6 +41,8 @@ class _Conn:
         store = self.store
         if text.startswith("select pg_advisory"):
             return _Result([])
+        if "from app_settings" in text:
+            return _Result([{"id": 1, "auto_index": True, "max_upload_bytes": 8_000_000}])
         if "from knowledge_bases" in text:
             return _Result([{"id": params[0], "name": "kb"}])
         if "from records where record_id" in text and text.startswith("select"):
