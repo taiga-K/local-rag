@@ -168,6 +168,65 @@ class Engine:
             return False
         return self.vectors.count() > 0
 
+    def capture_index(self) -> dict:
+        """Copy vectors, chunks, postings, and statuses before a full rebuild."""
+        points = self.vectors.scroll_all()
+        with self.db.connect() as conn:
+            chunks = [
+                dict(row)
+                for row in conn.execute(
+                    "select chunk_id, record_id, block_id, block_index, piece, text, token_count from chunks"
+                ).fetchall()
+            ]
+            postings = [
+                dict(row)
+                for row in conn.execute(
+                    "select generation, tokenizer, term, chunk_id, tf, doc_len from bm25_postings"
+                ).fetchall()
+            ]
+            statuses = [
+                dict(row)
+                for row in conn.execute("select record_id, indexing_status, failure_reason from records").fetchall()
+            ]
+        return {"points": points, "chunks": chunks, "postings": postings, "statuses": statuses}
+
+    def restore_index(self, snap: dict) -> None:
+        """Put a capture_index snapshot back after a rebuild that could not be published."""
+        self.vectors.ensure(self.embedder.dim)
+        self.vectors.restore_points(snap["points"])
+        with self.db.connect() as conn:
+            conn.execute("delete from bm25_postings")
+            conn.execute("delete from chunks")
+            for row in snap["chunks"]:
+                conn.execute(
+                    """
+                    insert into chunks (chunk_id, record_id, block_id, block_index, piece, text, token_count)
+                    values (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        row["chunk_id"], row["record_id"], row["block_id"], row["block_index"],
+                        row["piece"], row["text"], row["token_count"],
+                    ),
+                )
+            for row in snap["postings"]:
+                conn.execute(
+                    """
+                    insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
+                    values (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (row["generation"], row["tokenizer"], row["term"], row["chunk_id"], row["tf"], row["doc_len"]),
+                )
+            rebuild_bm25(conn)
+            for row in snap["statuses"]:
+                conn.execute(
+                    """
+                    update records set indexing_status = %s, failure_reason = %s, updated_at = now()
+                    where record_id = %s
+                    """,
+                    (row["indexing_status"], row["failure_reason"], row["record_id"]),
+                )
+            conn.commit()
+
     def reindex(self) -> tuple[str, list]:
         self.vectors.drop()
         self.vectors.ensure(self.embedder.dim)

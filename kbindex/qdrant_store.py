@@ -91,6 +91,39 @@ class Vectors:
             return
         self._call(lambda: self.client.upsert(collection_name=COLLECTION, points=points))
 
+    def scroll_all(self) -> list:
+        """Every point in the collection, including vectors. Empty when it is missing."""
+
+        def run() -> list:
+            if COLLECTION not in self._names():
+                return []
+            found: list = []
+            offset = None
+            while True:
+                batch, offset = self.client.scroll(
+                    collection_name=COLLECTION,
+                    limit=128,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                found.extend(batch)
+                if offset is None:
+                    break
+            return found
+
+        return self._call(run)
+
+    def restore_points(self, points: list) -> None:
+        """Upsert scrolled points. A named vector dict keeps the dense list."""
+        structs: list[qm.PointStruct] = []
+        for point in points:
+            vector = point.vector
+            if isinstance(vector, dict):
+                vector = vector["dense"]
+            structs.append(qm.PointStruct(id=point.id, vector={"dense": list(vector)}, payload=dict(point.payload or {})))
+        self.upsert(structs)
+
     def search(self, vector: list[float], *, limit: int, kb_ids: list[str] | None) -> list[tuple[str, float]]:
         def run() -> list[tuple[str, float]]:
             if COLLECTION not in self._names():

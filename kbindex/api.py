@@ -436,6 +436,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def reindex_all() -> JSONResponse:
         _require_postgres(app)
         try:
+            app.state.redis.ping()
+        except redis.RedisError:
+            raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
+        try:
+            snapshot = app.state.engine.capture_index()
             fingerprint, rows = app.state.engine.reindex()
         except QdrantUnavailable:
             raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
@@ -454,6 +459,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     lanes=app.state.settings.redis_lanes,
                 )
         except redis.RedisError:
+            app.state.engine.restore_index(snapshot)
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
         return JSONResponse(status_code=202, content={"fingerprint": fingerprint, "queued": len(rows)})
 
