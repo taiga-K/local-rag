@@ -3,6 +3,7 @@
 import os
 
 import pytest
+import redis
 from fastapi.testclient import TestClient
 
 from kbindex.api import create_app
@@ -232,14 +233,17 @@ def test_cleanup_drops_keyword_rows_and_the_indexed_copy(monkeypatch):
     assert store["status"] == "NOT_STARTED"
 
 
-def test_cleanup_is_409_while_records_are_queued(monkeypatch):
+def test_queued_rows_can_be_wiped_or_republished(monkeypatch):
+    """QUEUED with no running rebuild is a stuck queue, not a live sync."""
     store = {"busy": False, "queued_block": True, "queued": [], "status": "QUEUED"}
     vectors = _Vectors(count=2)
-    with _app(vectors, store, _Redis(), monkeypatch) as client:
-        response = client.post("/api/v1/connectors/vector-store/cleanup")
-    assert response.status_code == 409
-    assert response.json()["error"]["reason"] == "SYNC_IN_PROGRESS"
-    assert vectors.dropped == 0
+    redis_client = _Redis()
+    with _app(vectors, store, redis_client, monkeypatch) as client:
+        cleanup = client.post("/api/v1/connectors/vector-store/cleanup")
+        reindex = client.post("/api/v1/connectors/vector-store/reindex")
+    assert cleanup.status_code == 202, cleanup.text
+    assert vectors.dropped == 1
+    assert reindex.status_code == 202, reindex.text
 
 
 def test_reindex_holds_the_lock_so_cleanup_cannot_start(monkeypatch):
@@ -266,7 +270,40 @@ def test_reindex_holds_the_lock_so_cleanup_cannot_start(monkeypatch):
     assert vectors.dropped == 0
 
 
-def test_worker_claims_a_not_started_record():
+def test_publish_failure_does_not_stick_the_rebuild_lock(monkeypatch):
+    class _RedisFailsOnce(_Redis):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def xadd(self, *_args, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise redis.RedisError("down")
+            return "1-0"
+
+    redis_client = _RedisFailsOnce()
+    store = {
+        "busy": False,
+        "queued": [{
+            "record_id": "r1",
+            "kb_id": "kb",
+            "external_record_id": "doc",
+            "version": 1,
+            "content_rev": "c",
+        }],
+        "status": "QUEUED",
+    }
+    with _app(_Vectors(), store, redis_client, monkeypatch) as client:
+        failed = client.post("/api/v1/connectors/vector-store/reindex")
+        assert failed.status_code == 503, failed.text
+        assert failed.json()["error"]["reason"] == "REDIS_UNAVAILABLE"
+        store["queued_block"] = True
+        retried = client.post("/api/v1/connectors/vector-store/reindex")
+    assert retried.status_code == 202, retried.text
+
+
+def test_worker_does_not_claim_a_not_started_record():
     seen: list[str] = []
 
     class Conn:
@@ -294,7 +331,7 @@ def test_worker_claims_a_not_started_record():
 
     engine = Engine(load_settings(), DB(), None, FakeEmbedder())
     assert engine.index_record("kb", "doc-1", event_version=1, event_rev="rev") == "stale"
-    assert "NOT_STARTED" in seen[0]
+    assert "NOT_STARTED" not in seen[0]
 
 
 def test_upsert_rejects_a_vector_of_the_wrong_dimension():
