@@ -161,22 +161,26 @@ def test_each_branch_fetches_twice_the_retrieve_limit():
         engine = Engine(_fusion_settings(k), db=None, vectors=vectors, embedder=FakeEmbedder())
         seen: dict[str, int] = {}
 
-        def bm25(tokenizer: str, query: str, limit: int):
+        seen_kb: dict[str, list[str] | None] = {}
+
+        def bm25(tokenizer: str, query: str, limit: int, kb_ids=None):
             seen[tokenizer] = limit
+            seen_kb[tokenizer] = kb_ids
             if tokenizer == "sudachi":
                 return [("c1", 3.0)]
             return []
 
         engine._bm25 = bm25
         engine._filter_fused = lambda fused, kb_ids, bounds: [(cid, score, row(cid)) for cid, score in fused]
-        found = engine.search("晴れ", limit=4, kb_ids=None, max_per_record=None, bounds={})
+        found = engine.search("晴れ", limit=4, kb_ids=["kb"], max_per_record=None, bounds={})
+        assert seen_kb == {"sudachi": ["kb"], "char_bigram": ["kb"]}
         return found, [vectors.limits[0], seen["sudachi"], seen["char_bigram"]]
 
     found, depths = run(60)
-    assert depths == [8, 8, 8]
+    assert depths == [64, 64, 64]
     assert found["chunks"][0]["score"] == pytest_approx(2 / 61)
     found_k2, depths_k2 = run(2)
-    assert depths_k2 == [8, 8, 8]
+    assert depths_k2 == [64, 64, 64]
     assert found_k2["chunks"][0]["score"] == pytest_approx(2 / 3)
 
 

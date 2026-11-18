@@ -487,7 +487,7 @@ BM25 は Okapi である。`bm25.k1` の既定は 1.2、`bm25.b` の既定は 0.
 | チャンク方針 B | `modules/transformers/vectorstore.py` `_build_text_documents`、`_slice_on_character_boundaries` |
 | Qdrant の作成引数 | `services/vector_db/qdrant/qdrant.py` `create_collection`、`services/vector_db/models.py` `CollectionConfig` |
 | retrieve の要求とチャンク | `api/routes/search.py` `RetrieveQuery`、`_retrieve_chunks` |
-| 融合前の候補深さ `limit * 2` | `services/vector_db/qdrant/utils.py` L280-L309（`acc3095`）。方式は `Fusion.RRF` 固定で k は渡さない |
+| 融合前の候補深さ `max(limit * 2, 64)` | 起点は `services/vector_db/qdrant/utils.py` L280-L309（`acc3095`）の Prefetch `limit * 2`。下限 64 は下の「寝ている間の判断」 |
 | RRF の式と、コレクション間の k=60 | `modules/retrieval/result_merging.py` の `DEFAULT_RRF_RANK_CONSTANT` |
 | ストリーム名と封筒 | `services/messaging/redis_streams/indexing_consumer.py`、`redis_streams/producer.py`、`services/messaging/config.py` |
 | 再索引ルート | `connectors/api/router.py` の `POST /records/{record_id}/reindex` |
@@ -504,7 +504,7 @@ BM25 は Okapi である。`bm25.k1` の既定は 1.2、`bm25.b` の既定は 0.
 - スキーマのプロパティは型だけを見る。
 - 融合は検索器ごとの和である。PipesHub のコレクション間融合は最大寄与である。
 - dense とキーワードの RRF の k は 60 である。PipesHub が Qdrant に渡すハイブリッドは k を付けない。Qdrant v1.15 の既定は 2 で、式は `1/(position+2)`、position は 0 始まりである（`fusion_methods.md`）。k=60 は後段のコレクション間マージと、OpenSearch と Redis の値である。承認済み要件がこちらの融合に 60 を指定しているので、既定は 60 のままにする。対照は `fusion.k: 2` である。
-- 候補の深さは PipesHub と同じ `limit * 2` である。融合の場所は違う。PipesHub は Qdrant サーバの Prefetch 2 本（dense と sparse）で融合する。こちらは密を Qdrant から、キーワードを Postgres の BM25 から取り、アプリ側で足す。キーワード枝は Sudachi と文字バイグラムの 2 本である。
+- 候補の深さの起点は PipesHub の Prefetch `limit * 2` である。k=60 で密順位が 20 を超える文書が上位 10 から落ちるので、下限 64 を足した。融合の場所は違う。PipesHub は Qdrant サーバの Prefetch 2 本（dense と sparse）で融合する。こちらは密を Qdrant から、キーワードを Postgres の BM25 から取り、アプリ側で足す。キーワード枝は Sudachi と文字バイグラムの 2 本である。BM25 の候補は `filters.kb` で切ってから上位 N を取る。文書頻度は全体のままである。
 - HTTP の `application/blocks` も Content-Type として許す。PipesHub の検査は `application/json` だけである。
 - Redis のレーン既定は 1 である。PipesHub の環境変数既定は 8 である。1 は PipesHub が「レーン無し」と書く経路である。
 - 表の行は方針 B のまま1点にする。PipesHub は方針 C で行をまとめる。
@@ -522,6 +522,13 @@ ruri-v3 の接頭辞はモデルカードで閉じた。文書は `検索文書:
 BM25 の `k1` 1.2 と `b` 0.75、文字バイグラムの NFKC・空白と制御文字の除去・句読点と大小の維持は、文書化した既定として閉じた。設定キーは `bm25.k1`、`bm25.b`、`keyword.char_bigram` である。k1 と b と `casefold` と `drop_punct` はベンチマークの調整候補である。
 
 Redis のレーンは 1 で閉じた。根拠は上の Streams の節である。表の行は方針 B の1ブロック1点で閉じた。`rag_requirements.md` が方針 B を名指ししている。PipesHub の `_group_table_row_documents` は方針 C で、連続する行を1点にまとめる（`modules/transformers/vectorstore.py` L806-L812、呼び出し L3011、`acc3095`）。それを採るとチャンクの境界が要件と違う。LLM の `table_summary` で本文を上書きしない。
+
+## 寝ている間の判断
+
+taiga が寝ているあいだ、`rag_requirements.md` に無い細部は PipesHub（`acc3095`）に合わせ、無いものは要件の意図で決めた。
+
+1. 決定: 融合前の候補深さは `max(limit * 2, 64)` にする。証拠: JQaRA の external id `4210070`（チャンク `db93f5c3-b144-506f-9287-ecf03b424228:0`）は Sudachi 順位 1、文字バイグラム順位 1、密順位 21 だった。`limit * 2` が 20 のとき密の枝に入らず、k=60 の RRF は `2/61` で融合順位 15 になり、ハーネスの上位 10 から外れた。密順位が 20 を超えた自己検索は 1999 件中 5 件で、最悪は 32, 32, 28, 24, 21。深さ 64 のあと、その 5 件の融合順位は 3, 1, 1, 4, 3 になった。戻し方: `branch_depth` を `return limit * 2` に戻す。
+2. 決定: BM25 の候補は、上位 N を切る前に `filters.kb` のポスティングだけを残す。文書頻度は全体のまま。証拠: クエリ「スイス連邦の首都はどこ？」の全体 Sudachi 上位 64 は、jsquad-k60 が 24、jqara-k60 が 22、miracl-k60 が 18 だった。密検索はもともと kb で絞る。`filters.kb` は、他の kb が候補枠を埋めないという意味である。この絞り込みのあと MIRACL の nDCG@10 は PipesHub+ruri に届いていない。品質の穴を埋めるための変更ではなく、フィルタの正しさである。戻し方: `bm25_rows` の kb 述語を外す。
 
 ## 未決
 

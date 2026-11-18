@@ -1,0 +1,212 @@
+[
+  {
+    "variant": "dense-only",
+    "subset": "jqara-dev-s40",
+    "source": "engine.search",
+    "recall@1": 0.4074999999999999,
+    "recall@5": 0.8933333333333333,
+    "recall@10": 0.9800000000000001,
+    "ndcg@10": 0.9501028345290831,
+    "mrr@10": 0.9791666666666667
+  },
+  {
+    "variant": "dense-only",
+    "subset": "miracl-ja-dev-s30",
+    "source": "engine.search",
+    "recall@1": 0.46559523809523806,
+    "recall@5": 0.8037698412698414,
+    "recall@10": 0.9916666666666667,
+    "ndcg@10": 0.8194517719806734,
+    "mrr@10": 0.798611111111111
+  },
+  {
+    "variant": "dense-only",
+    "subset": "jsquad-valid-s40",
+    "source": "engine.search",
+    "recall@1": 0.85,
+    "recall@5": 0.975,
+    "recall@10": 0.975,
+    "ndcg@10": 0.9173134016304078,
+    "mrr@10": 0.8979166666666666
+  },
+  {
+    "variant": "dense+sudachi k=60",
+    "subset": "jqara-dev-s40",
+    "source": "engine.search",
+    "recall@1": 0.4074999999999999,
+    "recall@5": 0.8600000000000001,
+    "recall@10": 0.9324999999999999,
+    "ndcg@10": 0.9164834164218811,
+    "mrr@10": 0.978125
+  },
+  {
+    "variant": "dense+sudachi k=60",
+    "subset": "miracl-ja-dev-s30",
+    "source": "engine.search",
+    "recall@1": 0.36559523809523803,
+    "recall@5": 0.7440476190476191,
+    "recall@10": 0.9166666666666666,
+    "ndcg@10": 0.7518951446817096,
+    "mrr@10": 0.7200396825396825
+  },
+  {
+    "variant": "dense+sudachi k=60",
+    "subset": "jsquad-valid-s40",
+    "source": "engine.search",
+    "recall@1": 0.875,
+    "recall@5": 0.95,
+    "recall@10": 0.975,
+    "ndcg@10": 0.9312249111955598,
+    "mrr@10": 0.9166666666666666
+  },
+  {
+    "variant": "dense+bigram k=60",
+    "subset": "jqara-dev-s40",
+    "source": "engine.search",
+    "recall@1": 0.4074999999999999,
+    "recall@5": 0.9154166666666667,
+    "recall@10": 0.9529166666666665,
+    "ndcg@10": 0.9322603462925454,
+    "mrr@10": 0.9833333333333332
+  },
+  {
+    "variant": "dense+bigram k=60",
+    "subset": "miracl-ja-dev-s30",
+    "source": "engine.search",
+    "recall@1": 0.3433730158730159,
+    "recall@5": 0.7315476190476191,
+    "recall@10": 0.9583333333333334,
+    "ndcg@10": 0.7457161054758014,
+    "mrr@10": 0.7183730158730159
+  },
+  {
+    "variant": "dense+bigram k=60",
+    "subset": "jsquad-valid-s40",
+    "source": "engine.search",
+    "recall@1": 0.875,
+    "recall@5": 0.975,
+    "recall@10": 0.975,
+    "ndcg@10": 0.9269847218112712,
+    "mrr@10": 0.9112500000000001
+  },
+  {
+    "variant": "dense+sudachi+bigram k=60",
+    "subset": "jqara-dev-s40",
+    "source": "engine.search",
+    "recall@1": 0.38249999999999995,
+    "recall@5": 0.8295833333333335,
+    "recall@10": 0.9241666666666667,
+    "ndcg@10": 0.8965174223765425,
+    "mrr@10": 0.9660714285714285
+  },
+  {
+    "variant": "dense+sudachi+bigram k=60",
+    "subset": "miracl-ja-dev-s30",
+    "source": "engine.search",
+    "recall@1": 0.3183730158730159,
+    "recall@5": 0.740952380952381,
+    "recall@10": 0.8916666666666667,
+    "ndcg@10": 0.7152737782491414,
+    "mrr@10": 0.700595238095238
+  },
+  {
+    "variant": "dense+sudachi+bigram k=60",
+    "subset": "jsquad-valid-s40",
+    "source": "engine.search",
+    "recall@1": 0.9,
+    "recall@5": 0.95,
+    "recall@10": 0.975,
+    "ndcg@10": 0.9343497436978506,
+    "mrr@10": 0.9216666666666666
+  },
+  {
+    "variant": "dense+sudachi+bigram k=2",
+    "subset": "jqara-dev-s40",
+    "source": "engine.search",
+    "recall@1": 0.35750000000000004,
+    "recall@5": 0.8604166666666668,
+    "recall@10": 0.9675,
+    "ndcg@10": 0.9136368074065299,
+    "mrr@10": 0.9525
+  },
+  {
+    "variant": "dense+sudachi+bigram k=2",
+    "subset": "miracl-ja-dev-s30",
+    "source": "engine.search",
+    "recall@1": 0.3072619047619048,
+    "recall@5": 0.7587301587301588,
+    "recall@10": 0.9416666666666667,
+    "ndcg@10": 0.7319984245502975,
+    "mrr@10": 0.6928174603174604
+  },
+  {
+    "variant": "dense+sudachi+bigram k=2",
+    "subset": "jsquad-valid-s40",
+    "source": "engine.search",
+    "recall@1": 0.9,
+    "recall@5": 0.975,
+    "recall@10": 1.0,
+    "ndcg@10": 0.9440980998916281,
+    "mrr@10": 0.9268750000000001
+  },
+  {
+    "variant": "sudachi-only",
+    "subset": "jqara-dev-s40",
+    "source": "bm25_rows",
+    "recall@1": 0.3525,
+    "recall@5": 0.7262500000000001,
+    "recall@10": 0.8054166666666667,
+    "ndcg@10": 0.7842506850855911,
+    "mrr@10": 0.9216666666666666
+  },
+  {
+    "variant": "sudachi-only",
+    "subset": "miracl-ja-dev-s30",
+    "source": "bm25_rows",
+    "recall@1": 0.30309523809523814,
+    "recall@5": 0.7173412698412699,
+    "recall@10": 0.8833333333333333,
+    "ndcg@10": 0.6834620312283206,
+    "mrr@10": 0.611111111111111
+  },
+  {
+    "variant": "sudachi-only",
+    "subset": "jsquad-valid-s40",
+    "source": "bm25_rows",
+    "recall@1": 0.9,
+    "recall@5": 0.925,
+    "recall@10": 0.95,
+    "ndcg@10": 0.9246784235169869,
+    "mrr@10": 0.9166666666666666
+  },
+  {
+    "variant": "bigram-only",
+    "subset": "jqara-dev-s40",
+    "source": "bm25_rows",
+    "recall@1": 0.32625000000000004,
+    "recall@5": 0.7345833333333334,
+    "recall@10": 0.8699999999999999,
+    "ndcg@10": 0.8124494314097606,
+    "mrr@10": 0.9173611111111111
+  },
+  {
+    "variant": "bigram-only",
+    "subset": "miracl-ja-dev-s30",
+    "source": "bm25_rows",
+    "recall@1": 0.2572619047619048,
+    "recall@5": 0.6176190476190475,
+    "recall@10": 0.875,
+    "ndcg@10": 0.6388376205941051,
+    "mrr@10": 0.6005952380952381
+  },
+  {
+    "variant": "bigram-only",
+    "subset": "jsquad-valid-s40",
+    "source": "bm25_rows",
+    "recall@1": 0.925,
+    "recall@5": 0.95,
+    "recall@10": 1.0,
+    "ndcg@10": 0.9511792857630776,
+    "mrr@10": 0.9371527777777778
+  }
+]

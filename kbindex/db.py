@@ -352,7 +352,7 @@ def rebuild_bm25(conn) -> None:
     )
 
 
-def bm25_rows(conn, tokenizer: str, terms: list[str]):
+def bm25_rows(conn, tokenizer: str, terms: list[str], kb_ids: list[str] | None = None):
     stats = conn.execute(
         "select doc_count, total_tokens, avgdl from bm25_stats where generation = 1 and tokenizer = %s",
         (tokenizer,),
@@ -363,14 +363,27 @@ def bm25_rows(conn, tokenizer: str, terms: list[str]):
         "select term, df from bm25_terms where generation = 1 and tokenizer = %s and term = any(%s)",
         (tokenizer, terms),
     ).fetchall()
-    posts = conn.execute(
-        """
-        select term, chunk_id, tf, doc_len
-        from bm25_postings
-        where generation = 1 and tokenizer = %s and term = any(%s)
-        """,
-        (tokenizer, terms),
-    ).fetchall()
+    if kb_ids:
+        posts = conn.execute(
+            """
+            select p.term, p.chunk_id, p.tf, p.doc_len
+            from bm25_postings p
+            join chunks c on c.chunk_id = p.chunk_id
+            join records r on r.record_id = c.record_id
+            where p.generation = 1 and p.tokenizer = %s and p.term = any(%s)
+              and r.kb_id = any(%s)
+            """,
+            (tokenizer, terms, kb_ids),
+        ).fetchall()
+    else:
+        posts = conn.execute(
+            """
+            select term, chunk_id, tf, doc_len
+            from bm25_postings
+            where generation = 1 and tokenizer = %s and term = any(%s)
+            """,
+            (tokenizer, terms),
+        ).fetchall()
     return stats, df_rows, posts
 
 

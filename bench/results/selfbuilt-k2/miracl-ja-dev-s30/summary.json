@@ -1,0 +1,90 @@
+{
+  "label": "measured",
+  "dataset": "miracl-ja-dev-s30",
+  "n_queries": 30,
+  "n_documents": 292,
+  "n_errors": 0,
+  "n_empty": 0,
+  "requested_depth": 10,
+  "result_cap": 50,
+  "rankings_stable_across_repeats": true,
+  "metrics": {
+    "recall@1": {
+      "value": 0.30170634920634926,
+      "label": "measured",
+      "n": 30
+    },
+    "recall@5": {
+      "value": 0.7587301587301588,
+      "label": "measured",
+      "n": 30
+    },
+    "recall@10": {
+      "value": 0.9416666666666667,
+      "label": "measured",
+      "n": 30
+    },
+    "ndcg@10": {
+      "value": 0.7282757063063017,
+      "label": "measured",
+      "n": 30
+    },
+    "mrr@10": {
+      "value": 0.6761507936507937,
+      "label": "measured",
+      "n": 30
+    },
+    "recall@20": {
+      "value": null,
+      "label": "not_measurable",
+      "reason": "the run requests 10 hits, so Recall@20 is not computed"
+    }
+  },
+  "latency_ms": {
+    "repeats": 5,
+    "p50": {
+      "median": 130.5705000013404,
+      "min": 128.36023999989266,
+      "max": 132.65334199968493
+    },
+    "p95": {
+      "median": 144.9942840008589,
+      "min": 138.592534000054,
+      "max": 150.10309100034647
+    },
+    "p99": {
+      "median": 147.20272599879536,
+      "min": 140.52579300187062,
+      "max": 177.6525879977271
+    }
+  },
+  "warmup_ms": 135.97329500043998,
+  "index_seconds": 60.39418735000072,
+  "index_phases": {
+    "push_seconds": 8.52228291999927,
+    "wait_seconds": 51.87190470800124
+  },
+  "sanity": {
+    "passed": true,
+    "seconds": 0.5216082229999301,
+    "ranked": [
+      "keep",
+      "drop",
+      "other"
+    ],
+    "index": {
+      "seconds": 0.42356667000058223,
+      "push_seconds": 0.0965998280007625,
+      "wait_seconds": 0.3269677930002217
+    }
+  },
+  "conditions": {
+    "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
+    "seed": 20261117,
+    "limit": 10,
+    "repeats": 5,
+    "metrics": "ranx recall@1,recall@5,recall@10,ndcg@10,mrr@10",
+    "latency": "nearest-rank"
+  }
+}

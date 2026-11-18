@@ -1,0 +1,17 @@
+RESTART 2026-11-17T21:55:25+00:00
+START jqara-dev-s40 2026-11-17T21:55:25+00:00
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+RESTART2 2026-11-17T22:48:57+00:00
+START jqara-dev-s40 2026-11-17T22:48:57+00:00
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+/agent/repos/tmp-cf67989442305416/.venv/lib/python3.12/site-packages/ranx/metrics/recall.py:29: NumbaTypeSafetyWarning: unsafe cast from uint64 to int64. Precision may be lost.
+  scores[i] = _recall(qrels[i], run[i], k, rel_lvl)
+measured bench/results/selfbuilt-k60/jqara-dev-s40/summary.json
+DONE jqara-dev-s40 2026-11-17T22:58:06+00:00
+START miracl-ja-dev-s30 2026-11-17T22:58:06+00:00
+measured bench/results/selfbuilt-k60/miracl-ja-dev-s30/summary.json
+DONE miracl-ja-dev-s30 2026-11-17T23:18:08+00:00
+START jsquad-valid-s40 2026-11-17T23:18:08+00:00
+measured bench/results/selfbuilt-k60/jsquad-valid-s40/summary.json
+DONE jsquad-valid-s40 2026-11-18T00:28:04+00:00
+ALL_DONE

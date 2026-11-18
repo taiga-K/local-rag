@@ -339,15 +339,16 @@ class Engine:
             conn.commit()
 
     def search(self, query: str, *, limit: int, kb_ids: list[str] | None, max_per_record: int | None, bounds: dict) -> dict:
-        # Each branch fetches limit*2 before fusion. PipesHub's Qdrant prefetch
-        # does the same for one dense and one sparse leg (qdrant/utils.py
-        # L280-L301 at acc3095). Keyword legs are Postgres BM25, one per tokenizer.
+        # Each branch fetches branch_depth(limit) before fusion. PipesHub's
+        # Qdrant prefetch uses limit*2 for one dense and one sparse leg
+        # (qdrant/utils.py L280-L301 at acc3095). Keyword legs are Postgres
+        # BM25, one per tokenizer, restricted to filters.kb before the cut.
         depth = branch_depth(limit)
         dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=depth, kb_ids=kb_ids)
         keyword_pairs: dict[str, list[tuple[str, float]]] = {}
         for name in ("sudachi", "char_bigram"):
             if name in self.settings.tokenizers:
-                keyword_pairs[name] = self._bm25(name, query, depth)
+                keyword_pairs[name] = self._bm25(name, query, depth, kb_ids)
             else:
                 keyword_pairs[name] = []
         lists = [[cid for cid, _score in dense_pairs]]
@@ -415,12 +416,12 @@ class Engine:
             },
         }
 
-    def _bm25(self, tokenizer: str, query: str, limit: int) -> list[tuple[str, float]]:
+    def _bm25(self, tokenizer: str, query: str, limit: int, kb_ids: list[str] | None = None) -> list[tuple[str, float]]:
         terms = _terms(self.settings, tokenizer, query)
         if not terms:
             return []
         with self.db.connect() as conn:
-            stats, df_rows, posts = bm25_rows(conn, tokenizer, list(set(terms)))
+            stats, df_rows, posts = bm25_rows(conn, tokenizer, list(set(terms)), kb_ids)
         if not stats or stats["doc_count"] == 0:
             return []
         corpus = Corpus(k1=self.settings.bm25_k1, b=self.settings.bm25_b)
@@ -480,8 +481,14 @@ def _ms(moment: datetime) -> int:
 
 
 def branch_depth(limit: int) -> int:
-    """Hits each retriever returns before RRF. Mirrors PipesHub Prefetch `limit * 2`."""
-    return limit * 2
+    """Hits each retriever returns before RRF.
+
+    PipesHub prefetches ``limit * 2``. A keyword-only hit whose dense rank is
+    just outside that window scores as if dense never saw it. At k=60 that
+    drops a rank-1 keyword passage out of the top 10. The floor of 64 keeps
+    those near misses in the fusion.
+    """
+    return max(limit * 2, 64)
 
 
 def has_indexable_text(envelope: Envelope) -> bool:

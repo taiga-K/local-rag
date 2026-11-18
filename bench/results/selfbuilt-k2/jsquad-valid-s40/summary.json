@@ -1,0 +1,90 @@
+{
+  "label": "measured",
+  "dataset": "jsquad-valid-s40",
+  "n_queries": 40,
+  "n_documents": 1145,
+  "n_errors": 0,
+  "n_empty": 0,
+  "requested_depth": 10,
+  "result_cap": 50,
+  "rankings_stable_across_repeats": true,
+  "metrics": {
+    "recall@1": {
+      "value": 0.9,
+      "label": "measured",
+      "n": 40
+    },
+    "recall@5": {
+      "value": 0.975,
+      "label": "measured",
+      "n": 40
+    },
+    "recall@10": {
+      "value": 1.0,
+      "label": "measured",
+      "n": 40
+    },
+    "ndcg@10": {
+      "value": 0.9440980998916281,
+      "label": "measured",
+      "n": 40
+    },
+    "mrr@10": {
+      "value": 0.9268750000000001,
+      "label": "measured",
+      "n": 40
+    },
+    "recall@20": {
+      "value": null,
+      "label": "not_measurable",
+      "reason": "the run requests 10 hits, so Recall@20 is not computed"
+    }
+  },
+  "latency_ms": {
+    "repeats": 5,
+    "p50": {
+      "median": 149.47381299862172,
+      "min": 145.90607900026953,
+      "max": 154.8084280002513
+    },
+    "p95": {
+      "median": 183.66578799759736,
+      "min": 182.22234999848297,
+      "max": 193.94410099994275
+    },
+    "p99": {
+      "median": 206.7281509989698,
+      "min": 205.9204180004599,
+      "max": 309.08632800128544
+    }
+  },
+  "warmup_ms": 147.6216260016372,
+  "index_seconds": 290.87421130499933,
+  "index_phases": {
+    "push_seconds": 33.40915804099859,
+    "wait_seconds": 257.46505354700275
+  },
+  "sanity": {
+    "passed": true,
+    "seconds": 0.5236983750000945,
+    "ranked": [
+      "keep",
+      "drop",
+      "other"
+    ],
+    "index": {
+      "seconds": 0.4249219989978883,
+      "push_seconds": 0.09787035699991975,
+      "wait_seconds": 0.32705266599805327
+    }
+  },
+  "conditions": {
+    "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
+    "seed": 20261117,
+    "limit": 10,
+    "repeats": 5,
+    "metrics": "ranx recall@1,recall@5,recall@10,ndcg@10,mrr@10",
+    "latency": "nearest-rank"
+  }
+}
