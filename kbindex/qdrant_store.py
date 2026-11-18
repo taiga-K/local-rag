@@ -91,6 +91,41 @@ class Vectors:
             return
         self._call(lambda: self.client.upsert(collection_name=COLLECTION, points=points))
 
+    def scroll_record(self, record_id: str) -> list:
+        """Points whose payload recordId matches, including vectors."""
+
+        def run() -> list:
+            if COLLECTION not in self._names():
+                return []
+            filt = qm.Filter(must=[qm.FieldCondition(key="recordId", match=qm.MatchValue(value=record_id))])
+            found: list = []
+            offset = None
+            while True:
+                batch, offset = self.client.scroll(
+                    collection_name=COLLECTION,
+                    scroll_filter=filt,
+                    limit=128,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                found.extend(batch)
+                if offset is None:
+                    break
+            return found
+
+        return self._call(run)
+
+    def restore_points(self, points: list) -> None:
+        """Upsert scrolled points. A named vector dict keeps the dense list."""
+        structs: list[qm.PointStruct] = []
+        for point in points:
+            vector = point.vector
+            if isinstance(vector, dict):
+                vector = vector["dense"]
+            structs.append(qm.PointStruct(id=point.id, vector={"dense": list(vector)}, payload=dict(point.payload or {})))
+        self.upsert(structs)
+
     def search(self, vector: list[float], *, limit: int, kb_ids: list[str] | None) -> list[tuple[str, float]]:
         def run() -> list[tuple[str, float]]:
             if COLLECTION not in self._names():

@@ -30,6 +30,7 @@ from kbindex.db import (
     delete_chunks_for,
     kb_row,
     lock_record,
+    read_record_index,
     rebuild_bm25,
     record_id_for,
     record_row,
@@ -38,6 +39,7 @@ from kbindex.db import (
     replace_groups,
     schema_exists,
     schema_row,
+    write_record_index,
 )
 from kbindex.decide import decide
 from kbindex.embed import load_embedder
@@ -323,6 +325,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise PushRefusal(404, "RECORD_NOT_FOUND", "Record not found.")
             snapshot = dict(row)
             old_raw, old_stored = _read_pair(snapshot)
+            index_snap = read_record_index(conn, rid)
+            points = _record_points(app, str(rid))
             delete_chunks_for(conn, rid)
             rebuild_bm25(conn)
             conn.execute("delete from records where record_id = %s", (rid,))
@@ -344,7 +348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 lanes=app.state.settings.redis_lanes,
             )
         except redis.RedisError:
-            _restore_record(app, snapshot)
+            _restore_record(app, snapshot, index_snap, points)
             _restore_files(snapshot, old_raw, old_stored)
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
         return JSONResponse({"deleted": True, "recordId": str(rid), "externalRecordId": external_record_id})
@@ -734,7 +738,14 @@ def _remove_files(row) -> None:
             os.remove(path)
 
 
-def _restore_record(app, snapshot: dict) -> None:
+def _record_points(app, record_id: str) -> list:
+    try:
+        return list(app.state.vectors.scroll_record(record_id))
+    except QdrantUnavailable:
+        raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
+
+
+def _restore_record(app, snapshot: dict, index_snap: dict | None = None, points: list | None = None) -> None:
     with app.state.db.connect() as conn:
         existing = record_row(conn, snapshot["record_id"])
         if existing is None:
@@ -753,7 +764,14 @@ def _restore_record(app, snapshot: dict) -> None:
                     snapshot["raw_path"], snapshot["stored_path"], snapshot["created_at"], snapshot["updated_at"],
                 ),
             )
-            conn.commit()
+        if index_snap is not None:
+            write_record_index(conn, snapshot["record_id"], index_snap)
+        conn.commit()
+    if points:
+        try:
+            app.state.vectors.restore_points(points)
+        except QdrantUnavailable:
+            pass
 
 
 async def _retrieve(app, request: Request, *, debug: bool) -> JSONResponse:
