@@ -544,6 +544,8 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
     conn = app.state.db.connect()
     previous = None
     wrote = False
+    index_snap = None
+    index_points: list = []
     try:
         conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(rid),))
         previous = lock_record(conn, rid)
@@ -614,6 +616,8 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
             status = apply(previous["indexing_status"], "push", has_text=has_text).status
             event = None if mismatch else "updateRecord"
             publish_it = not mismatch
+            index_snap = read_record_index(conn, rid)
+            index_points = _record_points(app, str(rid))
             delete_chunks_for(conn, rid)
             rebuild_bm25(conn)
             conn.execute(
@@ -643,6 +647,13 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
                         _remove_new_files(app, kb_id, rid)
                 raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
         conn.commit()
+    except PushRefusal:
+        conn.rollback()
+        if wrote:
+            _restore_files(previous, old_raw, old_stored)
+            if previous is None:
+                _remove_new_files(app, kb_id, rid)
+        raise
     except psycopg.Error:
         conn.rollback()
         if wrote:
@@ -670,7 +681,7 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
                 lanes=app.state.settings.redis_lanes,
             )
         except redis.RedisError:
-            _compensate_push(app, previous, old_raw, old_stored, rid, kb_id)
+            _compensate_push(app, previous, old_raw, old_stored, rid, kb_id, index_snap, index_points)
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
     body = {
         "recordId": str(rid),
@@ -694,7 +705,7 @@ def _write_graph(conn, rid, stored: bytes) -> None:
     replace_groups(conn, rid, groups_of(payload))
 
 
-def _compensate_push(app, previous, old_raw, old_stored, rid, kb_id: str) -> None:
+def _compensate_push(app, previous, old_raw, old_stored, rid, kb_id: str, index_snap: dict | None = None, points: list | None = None) -> None:
     with app.state.db.connect() as conn:
         if previous is None:
             delete_chunks_for(conn, rid)
@@ -702,22 +713,35 @@ def _compensate_push(app, previous, old_raw, old_stored, rid, kb_id: str) -> Non
             conn.commit()
             _remove_new_files(app, kb_id, rid)
             return
-        else:
-            conn.execute(
-                """
-                update records set version = %s, revision_id = %s, content_rev = %s, blocks_sha = %s,
-                  record_name = %s, source_modified_ms = %s, indexing_status = %s, failure_reason = %s,
-                  raw_path = %s, stored_path = %s, updated_at = %s
-                where record_id = %s
-                """,
-                (
-                    previous["version"], previous["revision_id"], previous["content_rev"], previous["blocks_sha"],
-                    previous["record_name"], previous["source_modified_ms"], previous["indexing_status"],
-                    previous["failure_reason"], previous["raw_path"], previous["stored_path"], previous["updated_at"], rid,
-                ),
-            )
+        conn.execute(
+            """
+            update records set version = %s, revision_id = %s, content_rev = %s, blocks_sha = %s,
+              record_name = %s, source_modified_ms = %s, indexing_status = %s, failure_reason = %s,
+              raw_path = %s, stored_path = %s, updated_at = %s
+            where record_id = %s
+            """,
+            (
+                previous["version"], previous["revision_id"], previous["content_rev"], previous["blocks_sha"],
+                previous["record_name"], previous["source_modified_ms"], previous["indexing_status"],
+                previous["failure_reason"], previous["raw_path"], previous["stored_path"], previous["updated_at"], rid,
+            ),
+        )
+        if index_snap is not None:
+            write_record_index(conn, rid, index_snap)
         conn.commit()
     _restore_files(previous, old_raw, old_stored)
+    if points:
+        try:
+            app.state.vectors.restore_points(points)
+        except QdrantUnavailable:
+            pass
+
+
+def _record_points(app, record_id: str) -> list:
+    try:
+        return list(app.state.vectors.scroll_record(record_id))
+    except QdrantUnavailable:
+        raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
 
 
 def _restore_files(previous, old_raw: bytes | None, old_stored: bytes | None) -> None:
@@ -750,13 +774,6 @@ def _remove_files(row) -> None:
         path = row.get(key)
         if path and os.path.exists(path):
             os.remove(path)
-
-
-def _record_points(app, record_id: str) -> list:
-    try:
-        return list(app.state.vectors.scroll_record(record_id))
-    except QdrantUnavailable:
-        raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
 
 
 def _restore_record(app, snapshot: dict, index_snap: dict | None = None, points: list | None = None) -> None:
