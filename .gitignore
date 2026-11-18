@@ -6,3 +6,10 @@ __pycache__/
 .pytest_cache/
 
 kbindex.egg-info/
+
+apps/settings/node_modules
+apps/settings/dist/
+apps/settings/dist-electron/
+apps/settings/release/
+apps/settings/test-results/
+apps/settings/playwright-report/

@@ -43,6 +43,16 @@ def call(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
         return exc.code, json.loads(raw) if raw else {}
 
 
+def test_desktop_origin_is_reflected():
+    request = urllib.request.Request(
+        API + "/api/v1/settings/local",
+        headers={"Origin": "http://127.0.0.1:43124"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        assert response.status == 200
+        assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:43124"
+
+
 def test_local_settings_round_trip_and_manual_hold():
     try:
         status, saved = call("PUT", "/api/v1/settings/local", {

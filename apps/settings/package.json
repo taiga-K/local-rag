@@ -1,0 +1,39 @@
+{
+  "name": "kbindex-settings",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.electron.json",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "pack:win": "npm run build && electron-builder --win zip"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.7.16",
+    "@astryxdesign/theme-neutral": "0.7.16",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "local.kbindex.settings",
+    "productName": "kbindex settings",
+    "files": ["dist/**", "dist-electron/**"],
+    "directories": {"output": "release"},
+    "win": {"target": ["zip"]}
+  }
+}
