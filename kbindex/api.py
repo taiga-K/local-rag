@@ -593,6 +593,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             conn.commit()
         return JSONResponse(_local_body(row))
 
+    @app.post("/api/v1/connectors/vector-store/reindex")
+    def vector_store_reindex() -> JSONResponse:
+        return reindex_all()
+
+    @app.post("/api/v1/connectors/vector-store/cleanup")
+    def vector_store_cleanup() -> JSONResponse:
+        return cleanup()
+
     @app.post("/api/v1/connectors/{connector_id}/reindex")
     def reindex_connector(connector_id: str) -> JSONResponse:
         _require_kb(app, connector_id)
@@ -615,14 +623,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except redis.RedisError:
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
         return JSONResponse(status_code=202, content={"queued": len(rows), "connectorId": connector_id})
-
-    @app.post("/api/v1/connectors/vector-store/reindex")
-    def vector_store_reindex() -> JSONResponse:
-        return reindex_all()
-
-    @app.post("/api/v1/connectors/vector-store/cleanup")
-    def vector_store_cleanup() -> JSONResponse:
-        return cleanup()
 
     @app.get("/api/v1/engineer/embedding")
     def get_embedding() -> JSONResponse:
