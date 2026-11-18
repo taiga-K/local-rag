@@ -631,6 +631,13 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
                         _remove_new_files(app, kb_id, rid)
                 raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
         conn.commit()
+    except PushRefusal:
+        conn.rollback()
+        if wrote:
+            _restore_files(previous, old_raw, old_stored)
+            if previous is None:
+                _remove_new_files(app, kb_id, rid)
+        raise
     except psycopg.Error:
         conn.rollback()
         if wrote:

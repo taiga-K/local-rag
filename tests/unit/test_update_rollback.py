@@ -305,6 +305,50 @@ def test_content_update_stops_before_deleting_points_when_the_snapshot_fails(tmp
     assert [point.id for point in vectors.points] == ["p1"]
 
 
+def test_snapshot_failure_puts_the_previous_payload_files_back(tmp_path):
+    record_id = record_id_for("kb", "doc-1")
+    folder = tmp_path / "kb"
+    folder.mkdir()
+    raw_path = folder / f"{record_id}.raw.json"
+    stored_path = folder / f"{record_id}.stored.json"
+    raw_path.write_bytes(b'{"version":1,"blocks":"old"}')
+    stored_path.write_bytes(b'{"blocks":[{"data":"old"}]}')
+    store = _store(record_id)
+    store["records"][record_id]["raw_path"] = str(raw_path)
+    store["records"][record_id]["stored_path"] = str(stored_path)
+    vectors = _Vectors([_Point("p1", str(record_id))])
+
+    def boom(_record_id):
+        from kbindex.qdrant_store import QdrantUnavailable
+
+        raise QdrantUnavailable("scroll failed")
+
+    vectors.scroll_record = boom
+    settings = replace(load_settings(), data_dir=str(tmp_path))
+    app = create_app(settings)
+    app.router.on_startup.clear()
+    app.state.db = _DB(store)
+    app.state.redis = _RedisPublishFails()
+    app.state.vectors = vectors
+    app.state.engine = _Engine()
+    body = {
+        "recordName": "doc-1",
+        "mimeType": "application/blocks",
+        "externalRecordId": "doc-1",
+        "version": 2,
+        "blocksFormat": 1,
+        "blocks": {"blocks": [{"index": 0, "type": "text", "format": "txt", "data": "新しい本文"}]},
+    }
+    with TestClient(app) as client:
+        response = client.post("/api/v1/kb/kb/records", json=body)
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["reason"] == "QDRANT_UNAVAILABLE"
+    assert raw_path.read_bytes() == b'{"version":1,"blocks":"old"}'
+    assert stored_path.read_bytes() == b'{"blocks":[{"data":"old"}]}'
+    assert store["records"][record_id]["version"] == 1
+    assert [row["text"] for row in store["chunks"]] == ["本文"]
+
+
 def test_restore_points_upserts_a_dense_named_vector():
     saved = []
 
