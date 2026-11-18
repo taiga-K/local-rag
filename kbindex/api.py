@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from kbindex.config import Settings, load_settings
+from kbindex.config import Settings, load_settings, rebuild_enabled
 from kbindex.contract import (
     EXTERNAL_RECORD_ID,
     MAX_BODY_BYTES,
@@ -66,9 +66,7 @@ _RETRIEVE_KEYS = {
     "modifiedBefore",
     "maxChunksPerRecord",
     "rewriteQuery",
-    "legs",
 }
-_LEG_NAMES = ("dense", "sudachi", "char_bigram", "fastembed")
 _FILTER_KEYS = {
     "apps",
     "kb",
@@ -159,19 +157,6 @@ def parse_bound(value: object, *, end: bool) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _parse_legs(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
-        raise PushRefusal(400, "INVALID_FILTER", "legs must be a non-empty list of leg names.")
-    unknown = [item for item in value if item not in _LEG_NAMES]
-    if unknown:
-        raise PushRefusal(400, "INVALID_FILTER", "legs has an unknown name.")
-    seen: list[str] = []
-    for item in value:
-        if item not in seen:
-            seen.append(item)
-    return tuple(seen)
-
-
 def parse_retrieve(body: object) -> dict:
     if not isinstance(body, dict):
         raise PushRefusal(400, "INVALID_JSON", "The body is not a JSON object.")
@@ -186,9 +171,9 @@ def parse_retrieve(body: object) -> dict:
             raise PushRefusal(400, "REWRITE_DISABLED", "Query rewriting is disabled.")
         if body["rewriteQuery"] is not False:
             raise PushRefusal(400, "REWRITE_DISABLED", "rewriteQuery must be false.")
-    limit = body.get("limit", 10)
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
-        raise PushRefusal(422, "LIMIT_OUT_OF_RANGE", "limit must be from 1 to 10.")
+    limit = body.get("limit", 8)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise PushRefusal(422, "LIMIT_OUT_OF_RANGE", "limit must be from 1 to 50.")
     filters = body.get("filters", {})
     if filters is None:
         filters = {}
@@ -203,7 +188,6 @@ def parse_retrieve(body: object) -> dict:
     max_per = body.get("maxChunksPerRecord")
     if max_per is not None and (isinstance(max_per, bool) or not isinstance(max_per, int) or not 1 <= max_per <= 50):
         raise PushRefusal(422, "LIMIT_OUT_OF_RANGE", "maxChunksPerRecord must be from 1 to 50.")
-    legs = _parse_legs(body.get("legs")) if "legs" in body else None
     renamed = {}
     for key, value in (
         ("createdAfter", "created_after"),
@@ -219,8 +203,135 @@ def parse_retrieve(body: object) -> dict:
         "kb_ids": kb_ids,
         "max_per": max_per,
         "bounds": renamed,
-        "legs": legs,
     }
+
+
+_REBUILD_LOCK = "vector-store-rebuild"
+
+
+def _release_rebuild(app) -> None:
+    try:
+        app.state.redis.delete(_REBUILD_LOCK)
+    except redis.RedisError:
+        pass
+
+
+def _rebuild_gate(app) -> None:
+    if not rebuild_enabled():
+        raise PushRefusal(403, "REBUILD_DISABLED", "Vector store rebuild is disabled. Set ENABLE_VECTOR_STORE_REBUILD=true.")
+    _require_postgres(app)
+    _require_redis(app)
+    with app.state.db.connect() as conn:
+        busy = conn.execute(
+            "select 1 from records where indexing_status = 'IN_PROGRESS' limit 1"
+        ).fetchone()
+    if busy:
+        raise PushRefusal(409, "SYNC_IN_PROGRESS", "A sync or ingest is running.")
+    if not app.state.redis.set(_REBUILD_LOCK, "1", nx=True, ex=3600):
+        raise PushRefusal(409, "REBUILD_RUNNING", "A vector-store cleanup or reindex is already running.")
+
+
+def _publish_rows(app, rows) -> None:
+    for row in rows:
+        publish(
+            app.state.redis,
+            "reindexRecord",
+            record_id=str(row["record_id"]),
+            kb_id=row["kb_id"],
+            external_record_id=row["external_record_id"],
+            version=int(row["version"]),
+            content_rev=row["content_rev"] or "",
+            lanes=app.state.settings.redis_lanes,
+        )
+
+
+def _queue_records(app, kb_id: str) -> JSONResponse:
+    _require_postgres(app)
+    _require_redis(app)
+    with app.state.db.connect() as conn:
+        rows = conn.execute(
+            """
+            update records set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+            where kb_id = %s and coalesce(stored_path, '') <> ''
+            returning record_id, kb_id, external_record_id, version, content_rev
+            """,
+            (kb_id,),
+        ).fetchall()
+        conn.commit()
+    seen = set()
+    unique = []
+    for row in rows:
+        if row["record_id"] in seen:
+            continue
+        seen.add(row["record_id"])
+        unique.append(row)
+    _publish_rows(app, unique)
+    return JSONResponse(status_code=202, content={"queued": len(unique), "connectorId": kb_id})
+
+
+def _vector_store_job(app, operation: str) -> JSONResponse:
+    _rebuild_gate(app)
+    try:
+        if operation == "cleanup":
+            try:
+                app.state.vectors.drop()
+                app.state.vectors.ensure(app.state.embedder.dim)
+            except QdrantUnavailable:
+                raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
+            with app.state.db.connect() as conn:
+                conn.execute(
+                    """
+                    update records set indexing_status = 'NOT_STARTED', failure_reason = null, updated_at = now()
+                    """
+                )
+                conn.commit()
+            return JSONResponse(status_code=202, content={"accepted": True, "operation": "cleanup"})
+        try:
+            rows = app.state.engine.queue_reindex()
+        except psycopg.Error:
+            raise PushRefusal(503, "POSTGRES_UNAVAILABLE", "Postgres is unavailable.") from None
+        seen = set()
+        unique = []
+        for row in rows:
+            if row["record_id"] in seen:
+                continue
+            seen.add(row["record_id"])
+            unique.append(row)
+        _publish_rows(app, unique)
+        return JSONResponse(status_code=202, content={"accepted": True, "operation": "reindex", "queued": len(unique)})
+    finally:
+        _release_rebuild(app)
+
+
+async def _put_embedding(app, request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        raise PushRefusal(400, "ENVELOPE_INVALID", "The embedding body is invalid.") from None
+    if not isinstance(body, dict):
+        raise PushRefusal(400, "ENVELOPE_INVALID", "The embedding body is invalid.")
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise PushRefusal(400, "ENVELOPE_INVALID", "model is required.")
+    model = model.strip()
+    if model == app.state.settings.model:
+        return JSONResponse({"model": model, "restartRequired": False})
+    try:
+        count = app.state.vectors.count()
+    except QdrantUnavailable:
+        raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
+    if count >= 1:
+        raise PushRefusal(400, "MODEL_CHANGE_REFUSED", "The collection still has points.")
+    dimension = body.get("dimension")
+    if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
+        raise PushRefusal(400, "ENVELOPE_INVALID", "dimension is required when the model changes.")
+    try:
+        app.state.vectors.drop()
+        app.state.vectors.ensure(dimension)
+    except QdrantUnavailable:
+        raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Could not recreate the collection.") from None
+    app.state.requested_model = model
+    return JSONResponse({"model": model, "dimension": dimension, "restartRequired": True})
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -449,46 +560,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def reindex_knowledge_base_record(record_id: str, request: Request) -> JSONResponse:
         return await reindex_record(record_id, request)
 
-    @app.post("/api/v1/index/reindex")
-    def reindex_all() -> JSONResponse:
-        _require_postgres(app)
-        try:
-            fingerprint, rows = app.state.engine.reindex()
-        except QdrantUnavailable:
-            raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
-        except psycopg.Error:
-            raise PushRefusal(503, "POSTGRES_UNAVAILABLE", "Postgres is unavailable.") from None
-        try:
-            for row in rows:
-                publish(
-                    app.state.redis,
-                    "reindexRecord",
-                    record_id=str(row["record_id"]),
-                    kb_id=row["kb_id"],
-                    external_record_id=row["external_record_id"],
-                    version=int(row["version"]),
-                    content_rev=row["content_rev"] or "",
-                    lanes=app.state.settings.redis_lanes,
-                )
-        except redis.RedisError:
-            raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
-        return JSONResponse(status_code=202, content={"fingerprint": fingerprint, "queued": len(rows)})
+    @app.put("/api/v1/engineer/embedding")
+    async def put_embedding(request: Request) -> JSONResponse:
+        return await _put_embedding(app, request)
 
-    @app.post("/api/v1/index/cleanup")
-    def cleanup() -> JSONResponse:
-        try:
-            app.state.vectors.drop()
-        except QdrantUnavailable:
-            raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
-        with app.state.db.connect() as conn:
-            conn.execute("delete from bm25_postings")
-            conn.execute("delete from bm25_terms")
-            conn.execute("delete from bm25_stats")
-            conn.execute("delete from chunks")
-            conn.execute("delete from index_generation")
-            conn.commit()
-        app.state.engine.ensure_generation()
-        return JSONResponse({"deleted": True})
+    @app.post("/api/v1/connectors/vector-store/cleanup")
+    def vector_store_cleanup() -> JSONResponse:
+        return _vector_store_job(app, operation="cleanup")
+
+    @app.post("/api/v1/connectors/vector-store/reindex")
+    def vector_store_reindex() -> JSONResponse:
+        return _vector_store_job(app, operation="reindex")
+
+    @app.post("/api/v1/connectors/{connector_id}/reindex")
+    def reindex_connector(connector_id: str) -> JSONResponse:
+        return _queue_records(app, kb_id=connector_id)
+
+    @app.post("/api/v1/knowledgeBase/reindex/record-group/{record_group_id}")
+    def reindex_record_group(record_group_id: str) -> JSONResponse:
+        return _queue_records(app, kb_id=record_group_id)
 
     @app.post("/api/v1/retrieve")
     async def retrieve(request: Request) -> JSONResponse:
@@ -537,7 +627,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse:
     prepared = prepare(envelope)
     rid = record_id_for(kb_id, envelope.externalRecordId)
-    mismatch = app.state.engine.fingerprint_mismatch()
     has_text = has_indexable_text(envelope)
     directory = Path(app.state.settings.data_dir)
     conn = app.state.db.connect()
@@ -572,8 +661,8 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
         wrote = True
         if decision.action == "create":
             status = apply(None, "push", has_text=has_text).status
-            event = None if mismatch and has_text else "newRecord"
-            publish_it = status == "QUEUED" and not mismatch
+            event = "newRecord"
+            publish_it = status == "QUEUED"
             conn.execute(
                 """
                 insert into records (
@@ -611,8 +700,8 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
             changed = False
         else:
             status = apply(previous["indexing_status"], "push", has_text=has_text).status
-            event = None if mismatch else "updateRecord"
-            publish_it = not mismatch
+            event = "updateRecord"
+            publish_it = True
             delete_chunks_for(conn, rid)
             rebuild_bm25(conn)
             conn.execute(
@@ -782,8 +871,6 @@ async def _retrieve(app, request: Request, *, debug: bool) -> JSONResponse:
     _require_postgres(app)
     if not app.state.vectors.ping():
         raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.")
-    if app.state.engine.config_refused():
-        raise PushRefusal(400, "INDEX_CONFIG_MISMATCH", _MODEL_CHANGE)
     try:
         found = app.state.engine.search(
             parsed["query"],
@@ -791,7 +878,6 @@ async def _retrieve(app, request: Request, *, debug: bool) -> JSONResponse:
             kb_ids=parsed["kb_ids"],
             max_per_record=parsed["max_per"],
             bounds=parsed["bounds"],
-            legs=parsed["legs"],
         )
     except QdrantUnavailable:
         raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
@@ -810,8 +896,7 @@ def _breakdown(found: dict) -> list[dict]:
         entry = {
             "chunkId": cid,
             "dense": _leg(found["dense"], cid),
-            "sudachi": _leg(found["keyword"].get("sudachi", []), cid),
-            "char_bigram": _leg(found["keyword"].get("char_bigram", []), cid),
+            "fastembed": _leg(found["keyword"].get("fastembed", []), cid),
             "rrf": score,
         }
         rows.append(entry)

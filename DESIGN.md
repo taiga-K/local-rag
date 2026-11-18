@@ -511,7 +511,13 @@ BM25 は Okapi である。`bm25.k1` の既定は 1.2、`bm25.b` の既定は 0.
 
 ## ノートで閉じた判断
 
-`rag_requirements.md`（taiga、2026-11-18 承認）が次を決めている。Sudachi モード C と `normalize: true`、RRF の k=60、チャンク方針 B、リランカ無し、Qdrant、Postgres、Redis Streams、ruri-v3-310m、モデル変更とキーワード方式の変更は全件入れ直し。`normalize: true` は Sudachi の `normalized_form` とする。`rag_sparse_compare.md` の表 A が「Sudachi C 単位 内容語＋正規化形」をその名前で測っている。内容語への絞り込みはノートが決めていないので、品詞では落とさない。
+`rag_requirements.md` の L13・L14・L31 は 2026-11-18 19:47 JST に config A へ改訂された。設定例は `embedding: {model: cl-nagoya/ruri-v3-310m, device: cpu}` だけである。キーワードは fastembed `Qdrant/bm25` の 1 本で、RRF は Qdrant の `1/(position+2)`（0 始まり）に固定する。Sudachi と文字バイグラムは製品から外す。チャンク方針 B、リランカ無し、Qdrant、Postgres、Redis Streams、ruri-v3-310m はそのままである。モデル名または次元が違い、点が 1 つでも残っていれば設定変更は 400 で拒み、自動では入れ直さない。点が 0 ならコレクションを新しい次元で作り直して受け付ける。
+
+ベクトルストアの cleanup と reindex は `ENABLE_VECTOR_STORE_REBUILD=true` のときだけ動く。既定は false である。有効にするには API とワーカーの環境変数に `ENABLE_VECTOR_STORE_REBUILD=true` を置いて起動し直す。
+
+## 後回し
+
+管理者だけに制限することは対象外である。認証がまだ無い。cleanup、vector-store reindex、モデル変更はエンジニア向け API のままで、Electron には出さない。認証を足すときに制限する。
 
 `gui_settings_scope.md`（PipesHub `acc3095`）が次を決めている。HNSW `ef` 256、oversampling 1.5、検索画面の件数 10。retrieve の上限は、この依頼が「既定 10、上限 10」と指定したので 10 にする。PipesHub の `RetrieveQuery` 自体は既定 8、上限 50 である（`search.py`）。埋め込みモデルは、点が残っているあいだ変更できない（`embedding_switch_docs.md`）。
 

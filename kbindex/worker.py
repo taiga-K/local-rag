@@ -79,9 +79,6 @@ def _handle(engine: Engine, db: Database, client, stream_name: str, message_id: 
     if not event["kbId"] or not event["externalRecordId"]:
         client.xack(stream_name, GROUP, message_id)
         return
-    if engine.fingerprint_mismatch():
-        client.xack(stream_name, GROUP, message_id)
-        return
     with db.connect() as conn:
         row = conn.execute(
             "select version, content_rev from records where kb_id = %s and external_record_id = %s",

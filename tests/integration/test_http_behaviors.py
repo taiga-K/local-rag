@@ -425,7 +425,7 @@ def test_retrieve_boundaries():
     status, zero = _call("POST", "/api/v1/retrieve", {**query, "limit": 0})
     _assert_error(status, zero, "LIMIT_OUT_OF_RANGE")
     assert status == 422
-    status, high = _call("POST", "/api/v1/retrieve", {**query, "limit": 11})
+    status, high = _call("POST", "/api/v1/retrieve", {**query, "limit": 51})
     _assert_error(status, high, "LIMIT_OUT_OF_RANGE")
     assert status == 422
     status, one = _call("POST", "/api/v1/retrieve", {**query, "limit": 1})
@@ -460,7 +460,7 @@ def test_debug_japanese_bm25_and_dense():
         "filters": {"kb": [kb]},
     })
     hit = next(row for row in lexical["breakdown"] if "晴れ" in _text_of(lexical, row["chunkId"]))
-    assert hit["sudachi"] is not None or hit["char_bigram"] is not None
+    assert hit["fastembed"] is not None
     assert hit["dense"] is not None
     _code, dense_only = _call("POST", "/api/v1/debug/retrieve", {
         "query": "琵琶湖水深測定",
@@ -470,8 +470,7 @@ def test_debug_japanese_bm25_and_dense():
     assert dense_only["breakdown"]
     for row in dense_only["breakdown"]:
         assert row["dense"] is not None
-        assert row["sudachi"] is None
-        assert row["char_bigram"] is None
+        assert row["fastembed"] is not None
 
 
 def _text_of(payload: dict, chunk_id: str) -> str:

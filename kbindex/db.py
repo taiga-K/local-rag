@@ -118,6 +118,7 @@ ALTERS = (
     "alter table bm25_stats add column if not exists avgdl double precision not null default 0",
     "alter table records add column if not exists embed_done int",
     "alter table records add column if not exists embed_total int",
+    "alter table records add column if not exists has_indexed_copy boolean not null default false",
     "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
 
@@ -407,7 +408,9 @@ def hydrate_chunks(conn, chunk_ids: list[str]):
     return conn.execute(
         """
         select c.chunk_id, c.text, c.block_index, c.piece, c.token_count,
-               r.record_id, r.external_record_id, r.record_name, r.kb_id, r.source_modified_ms, r.created_at, r.updated_at
+               r.record_id, r.external_record_id, r.record_name, r.kb_id,
+               r.indexing_status, r.has_indexed_copy,
+               r.source_modified_ms, r.created_at, r.updated_at
         from chunks c
         join records r on r.record_id = c.record_id
         where c.chunk_id = any(%s)
