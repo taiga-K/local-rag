@@ -4,10 +4,6 @@ embedding:
   backend: sentence-transformers
 keyword:
   tokenizers: [sudachi, char_bigram, fastembed]
-search:
-  # Query-time only. The index still stores every tokenizer above.
-  # A: [dense, fastembed]  B: [dense, sudachi, char_bigram]  C: [dense]
-  legs: [dense, fastembed]
   sudachi:
     mode: C
     normalize: true
@@ -17,6 +13,10 @@ search:
     drop_space: true
     drop_control: true
     drop_punct: false
+search:
+  # Query-time only. The index still stores every tokenizer above.
+  # A: [dense, fastembed]  B: [dense, sudachi, char_bigram]  C: [dense]
+  legs: [dense, fastembed]
 fusion:
   method: rrf
   k: 1

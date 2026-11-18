@@ -68,7 +68,7 @@ _RETRIEVE_KEYS = {
     "rewriteQuery",
     "legs",
 }
-_LEG_NAMES = ("dense", "sudachi", "char_bigram")
+_LEG_NAMES = ("dense", "sudachi", "char_bigram", "fastembed")
 _FILTER_KEYS = {
     "apps",
     "kb",

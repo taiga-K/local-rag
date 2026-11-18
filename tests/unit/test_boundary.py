@@ -135,9 +135,32 @@ def test_query_and_document_are_the_same_string():
 def test_legs_selects_named_retrievers():
     parsed = parse_retrieve({"query": "首都", "legs": ["dense", "sudachi"]})
     assert parsed["legs"] == ("dense", "sudachi")
+    parsed = parse_retrieve({"query": "首都", "legs": ["dense", "fastembed"]})
+    assert parsed["legs"] == ("dense", "fastembed")
     with pytest.raises(PushRefusal) as unknown:
         parse_retrieve({"query": "首都", "legs": ["sparse"]})
     assert unknown.value.status == 400
+
+
+def test_shipped_config_loads_tokenizer_flags_into_the_fingerprint():
+    import yaml
+    from dataclasses import replace
+    from pathlib import Path
+
+    raw = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    loaded = load_settings("config.yaml")
+    sudachi = raw["keyword"]["sudachi"]
+    bigram = raw["keyword"]["char_bigram"]
+    assert loaded.sudachi_mode == sudachi["mode"]
+    assert loaded.sudachi_normalize is sudachi["normalize"]
+    assert loaded.bigram_nfkc is bigram["nfkc"]
+    assert loaded.bigram_casefold is bigram["casefold"]
+    assert loaded.bigram_drop_space is bigram["drop_space"]
+    assert loaded.bigram_drop_control is bigram["drop_control"]
+    assert loaded.bigram_drop_punct is bigram["drop_punct"]
+    base = loaded.index_fingerprint(hidden_size=768, max_seq_length=8192)
+    flipped = replace(loaded, bigram_drop_punct=not loaded.bigram_drop_punct)
+    assert flipped.index_fingerprint(hidden_size=768, max_seq_length=8192) != base
 
 
 def test_fingerprint_ignores_device_and_bm25():
