@@ -50,6 +50,50 @@ export type SettingsDraft = {
   autoIndex: boolean;
 };
 
+export type SettingsField = "includeSubfolders" | "autoIndex" | "folders";
+
+export type AppliedSettings = {
+  folders?: string;
+  includeSubfolders?: boolean;
+  autoIndex?: boolean;
+  message: string;
+};
+
+export class SettingsSaver {
+  private tail: Promise<void> = Promise.resolve();
+
+  save(
+    readLatest: () => SettingsDraft,
+    patch: Partial<SettingsDraft>,
+    persist: (draft: SettingsDraft) => Promise<SettingsDraft>,
+    field: SettingsField,
+  ): Promise<AppliedSettings> {
+    const run = this.tail.then(async (): Promise<AppliedSettings> => {
+      const next = { ...readLatest(), ...patch };
+      try {
+        const saved = await persist(next);
+        if (field === "folders") {
+          return {
+            folders: saved.folders,
+            includeSubfolders: saved.includeSubfolders,
+            autoIndex: saved.autoIndex,
+            message: "保存しました",
+          };
+        }
+        return { [field]: saved[field], message: "保存しました" };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "保存に失敗しました";
+        return { message };
+      }
+    });
+    this.tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+}
+
 export async function commitSettingsChange(
   current: SettingsDraft,
   next: SettingsDraft,

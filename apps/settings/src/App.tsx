@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -7,7 +7,7 @@ import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { loadSettings, listKnowledgeBases, loadStatus, reindexConnector, saveSettings, type RecordRow } from "./api";
-import { SCREENS, autoIndexCopy, commitSettingsChange, countRows, foldersText, parseFolders, type ScreenId, type SettingsDraft } from "./view";
+import { SCREENS, SettingsSaver, autoIndexCopy, countRows, foldersText, parseFolders, type AppliedSettings, type ScreenId, type SettingsDraft } from "./view";
 
 export function App() {
   const [screen, setScreen] = useState<ScreenId>("folders");
@@ -18,6 +18,12 @@ export function App() {
   const [message, setMessage] = useState("");
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [records, setRecords] = useState<RecordRow[]>([]);
+  const draftRef = useRef<SettingsDraft>({ folders: "", includeSubfolders: true, autoIndex: true });
+  const saverRef = useRef<SettingsSaver | null>(null);
+  if (saverRef.current === null) {
+    saverRef.current = new SettingsSaver();
+  }
+  draftRef.current = { folders, includeSubfolders, autoIndex };
 
   useEffect(() => {
     void loadSettings().then((settings) => {
@@ -46,10 +52,21 @@ export function App() {
     };
   }
 
-  function applyDraft(result: { value: SettingsDraft; message: string }) {
-    setFolders(result.value.folders);
-    setIncludeSubfolders(result.value.includeSubfolders);
-    setAutoIndex(result.value.autoIndex);
+  function applyPartial(result: AppliedSettings) {
+    const next = { ...draftRef.current };
+    if (result.folders !== undefined) {
+      next.folders = result.folders;
+    }
+    if (result.includeSubfolders !== undefined) {
+      next.includeSubfolders = result.includeSubfolders;
+    }
+    if (result.autoIndex !== undefined) {
+      next.autoIndex = result.autoIndex;
+    }
+    draftRef.current = next;
+    setFolders(next.folders);
+    setIncludeSubfolders(next.includeSubfolders);
+    setAutoIndex(next.autoIndex);
     setMessage(result.message);
   }
 
@@ -75,19 +92,26 @@ export function App() {
       {screen === "folders" ? (
         <VStack gap={2}>
           <Text>取り込むフォルダを1行に1つ書きます。下の階層も含めるかは次のボタンです。</Text>
-          <TextArea label="フォルダ" value={folders} rows={4} onChange={(value) => setFolders(value)} />
+          <TextArea
+            label="フォルダ"
+            value={folders}
+            rows={4}
+            onChange={(value) => {
+              draftRef.current = { ...draftRef.current, folders: value };
+              setFolders(value);
+            }}
+          />
           <Button
             label={includeSubfolders ? "下の階層も含める" : "そのフォルダだけ"}
             onClick={() => {
-              const current = { folders, includeSubfolders, autoIndex };
-              void commitSettingsChange(current, { ...current, includeSubfolders: !includeSubfolders }, persist).then(applyDraft);
+              const next = !draftRef.current.includeSubfolders;
+              void saverRef.current?.save(() => draftRef.current, { includeSubfolders: next }, persist, "includeSubfolders").then(applyPartial);
             }}
           />
           <Button
             label="保存"
             onClick={() => {
-              const current = { folders, includeSubfolders, autoIndex };
-              void commitSettingsChange(current, current, persist).then(applyDraft);
+              void saverRef.current?.save(() => draftRef.current, {}, persist, "folders").then(applyPartial);
             }}
           />
         </VStack>
@@ -99,8 +123,8 @@ export function App() {
           <Button
             label={autoIndex ? "自動索引を止める" : "自動索引を始める"}
             onClick={() => {
-              const current = { folders, includeSubfolders, autoIndex };
-              void commitSettingsChange(current, { ...current, autoIndex: !autoIndex }, persist).then(applyDraft);
+              const next = !draftRef.current.autoIndex;
+              void saverRef.current?.save(() => draftRef.current, { autoIndex: next }, persist, "autoIndex").then(applyPartial);
             }}
           />
           <TextInput label="知識ベース" value={kbId} onChange={(value) => setKbId(value)} />

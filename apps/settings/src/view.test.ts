@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCREENS, autoIndexCopy, commitSettingsChange, countRows, foldersText, parseFolders, showsAdminControls } from "./view";
+import { SCREENS, SettingsSaver, autoIndexCopy, commitSettingsChange, countRows, foldersText, parseFolders, showsAdminControls } from "./view";
 
 describe("settings view", () => {
   it("keeps unique folder paths and drops blanks", () => {
@@ -44,5 +44,58 @@ describe("settings view", () => {
     const saved = await commitSettingsChange(again.value, { ...again.value, includeSubfolders: false }, async (next) => next);
     expect(saved.value.includeSubfolders).toBe(false);
     expect(saved.message).toBe("保存しました");
+  });
+
+  it("sends the later toggle from the state the earlier save already changed", async () => {
+    const saver = new SettingsSaver();
+    let state = { folders: "/data/a", includeSubfolders: true, autoIndex: true };
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const bodies: Array<{ includeSubfolders: boolean; autoIndex: boolean }> = [];
+    const first = saver.save(
+      () => state,
+      { includeSubfolders: false },
+      async (draft) => {
+        bodies.push({ includeSubfolders: draft.includeSubfolders, autoIndex: draft.autoIndex });
+        await gate;
+        state = { ...state, includeSubfolders: false };
+        return { ...draft, folders: foldersText(parseFolders(draft.folders)) };
+      },
+      "includeSubfolders",
+    );
+    const second = saver.save(
+      () => state,
+      { autoIndex: false },
+      async (draft) => {
+        bodies.push({ includeSubfolders: draft.includeSubfolders, autoIndex: draft.autoIndex });
+        state = { ...state, autoIndex: false };
+        return { ...draft, folders: foldersText(parseFolders(draft.folders)) };
+      },
+      "autoIndex",
+    );
+    release();
+    await first;
+    await second;
+    expect(bodies).toEqual([
+      { includeSubfolders: false, autoIndex: true },
+      { includeSubfolders: false, autoIndex: false },
+    ]);
+  });
+
+  it("does not hand folder text back when a toggle save fails", async () => {
+    const saver = new SettingsSaver();
+    const result = await saver.save(
+      () => ({ folders: "/typed-after-click", includeSubfolders: true, autoIndex: true }),
+      { includeSubfolders: false },
+      async () => {
+        throw new Error("down");
+      },
+      "includeSubfolders",
+    );
+    expect(result.folders).toBeUndefined();
+    expect(result.includeSubfolders).toBeUndefined();
+    expect(result.message).toBe("down");
   });
 });
