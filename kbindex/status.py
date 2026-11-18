@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-STATUSES = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY")
+STATUSES = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "AUTO_INDEX_OFF")
 
 
 @dataclass(frozen=True)
@@ -49,3 +49,10 @@ def apply(status: str | None, event: str, *, has_text: bool = True, ok: bool = T
             return Transition(status or "", None, "UNKNOWN")
         return Transition("QUEUED", None)
     raise ValueError(f"unknown event {event}")
+
+
+def hold_for_manual(status: str, *, auto_index: bool, has_text: bool) -> str:
+    """Manual indexing keeps a new text record out of the worker queue."""
+    if has_text and not auto_index and status == "QUEUED":
+        return "AUTO_INDEX_OFF"
+    return status

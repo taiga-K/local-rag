@@ -35,6 +35,13 @@ def _settings(**over) -> Settings:
     return Settings(**base)
 
 
+def test_upload_limit_is_the_configured_cap():
+    admit("application/json", "4", b"{}", limit=8)
+    with pytest.raises(PushRefusal) as huge:
+        admit("application/json", "9", b"123456789", limit=8)
+    assert huge.value.status == 413 and huge.value.extra["limitBytes"] == 8
+
+
 def test_content_type_and_length():
     admit("application/json", None, b"{}")
     admit("application/blocks; charset=utf-8", "2", b"{}")

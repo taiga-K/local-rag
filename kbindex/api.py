@@ -26,7 +26,14 @@ from kbindex.contract import (
 from kbindex.db import (
     Database,
     chunk_public_id,
+    app_settings_row,
     counts_for,
+    list_kbs,
+    list_record_status,
+    queue_kb_records,
+    save_local_settings,
+    save_requested_model,
+    save_upload_limit,
     delete_chunks_for,
     kb_row,
     lock_record,
@@ -52,7 +59,7 @@ from kbindex.pipeline import (
     write_payload,
 )
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
-from kbindex.status import apply
+from kbindex.status import apply, hold_for_manual
 from kbindex.stream import ensure_group, publish
 
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -104,13 +111,31 @@ class PropIn(BaseModel):
     type: str
 
 
+class LocalSettingsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    folders: list[str]
+    includeSubfolders: bool = True
+    autoIndex: bool = True
+
+
+class EmbeddingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    model: str = Field(min_length=1, max_length=200)
+
+
+class UploadLimitIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    maxBytes: int = Field(ge=1, le=MAX_BODY_BYTES)
+
+
 class SchemaIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schemaId: str = Field(min_length=1, max_length=300)
     properties: list[PropIn] = Field(default_factory=list, max_length=256)
 
 
-def admit(content_type: str | None, content_length: str | None, body: bytes) -> None:
+def admit(content_type: str | None, content_length: str | None, body: bytes, *, limit: int | None = None) -> None:
+    cap = MAX_BODY_BYTES if limit is None else limit
     media = (content_type or "").split(";")[0].strip().lower()
     if media not in {"application/json", "application/blocks"}:
         raise PushRefusal(415, "UNSUPPORTED_MEDIA_TYPE", "The body must be application/json or application/blocks.")
@@ -121,19 +146,19 @@ def admit(content_type: str | None, content_length: str | None, body: bytes) -> 
             raise PushRefusal(400, "INVALID_CONTENT_LENGTH", "Content-Length is not a number.") from None
         if declared < 0:
             raise PushRefusal(400, "INVALID_CONTENT_LENGTH", "Content-Length is negative.")
-        if declared > MAX_BODY_BYTES:
+        if declared > cap:
             raise PushRefusal(
                 413,
                 "PAYLOAD_TOO_LARGE",
-                "The body is larger than 16 MiB.",
-                extra={"limitBytes": MAX_BODY_BYTES},
+                "The body is larger than the configured limit.",
+                extra={"limitBytes": cap},
             )
-    if len(body) > MAX_BODY_BYTES:
+    if len(body) > cap:
         raise PushRefusal(
             413,
             "PAYLOAD_TOO_LARGE",
-            "The body is larger than 16 MiB.",
-            extra={"limitBytes": MAX_BODY_BYTES},
+            "The body is larger than the configured limit.",
+            extra={"limitBytes": cap},
         )
 
 
@@ -302,7 +327,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/v1/kb/{kb_id}/records")
     async def push_record(kb_id: str, request: Request) -> JSONResponse:
         body = await request.body()
-        admit(request.headers.get("content-type"), request.headers.get("content-length"), body)
+        with app.state.db.connect() as conn:
+            limit = int(app_settings_row(conn)["max_upload_bytes"])
+        admit(request.headers.get("content-type"), request.headers.get("content-length"), body, limit=limit)
         envelope = parse_envelope(body)
         _require_kb(app, kb_id)
         if envelope.metadata is not None:
@@ -514,6 +541,141 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
+    @app.get("/api/v1/kb")
+    def list_knowledge_bases() -> JSONResponse:
+        with app.state.db.connect() as conn:
+            rows = list_kbs(conn)
+        return JSONResponse({"knowledgeBases": [{"id": row["id"], "name": row["name"]} for row in rows]})
+
+    @app.get("/api/v1/kb/{kb_id}/records")
+    def list_records(kb_id: str) -> JSONResponse:
+        _require_kb(app, kb_id)
+        with app.state.db.connect() as conn:
+            rows = list_record_status(conn, kb_id)
+        return JSONResponse(
+            {
+                "records": [
+                    {
+                        "recordId": str(row["record_id"]),
+                        "externalRecordId": row["external_record_id"],
+                        "recordName": row["record_name"],
+                        "indexingStatus": row["indexing_status"],
+                        "failureReason": None if row["indexing_status"] in {"COMPLETED", "EMPTY"} else row["failure_reason"],
+                        "version": row["version"],
+                    }
+                    for row in rows
+                ]
+            }
+        )
+
+    @app.get("/api/v1/settings/local")
+    def get_local_settings() -> JSONResponse:
+        with app.state.db.connect() as conn:
+            row = app_settings_row(conn)
+        return JSONResponse(_local_body(row))
+
+    @app.put("/api/v1/settings/local")
+    async def put_local_settings(request: Request) -> JSONResponse:
+        try:
+            payload = LocalSettingsIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The local settings body is invalid.") from None
+        folders = [item.strip() for item in payload.folders]
+        if any(not item or len(item) > 1024 for item in folders) or len(folders) > 50:
+            raise PushRefusal(400, "ENVELOPE_INVALID", "folders must be 1 to 50 paths of at most 1024 characters.")
+        with app.state.db.connect() as conn:
+            row = save_local_settings(
+                conn,
+                folders=folders,
+                include_subfolders=payload.includeSubfolders,
+                auto_index=payload.autoIndex,
+            )
+            conn.commit()
+        return JSONResponse(_local_body(row))
+
+    @app.post("/api/v1/connectors/{connector_id}/reindex")
+    def reindex_connector(connector_id: str) -> JSONResponse:
+        _require_kb(app, connector_id)
+        _require_redis(app)
+        with app.state.db.connect() as conn:
+            rows = queue_kb_records(conn, connector_id)
+            conn.commit()
+        try:
+            for row in rows:
+                publish(
+                    app.state.redis,
+                    "reindexRecord",
+                    record_id=str(row["record_id"]),
+                    kb_id=row["kb_id"],
+                    external_record_id=row["external_record_id"],
+                    version=int(row["version"]),
+                    content_rev=row["content_rev"] or "",
+                    lanes=app.state.settings.redis_lanes,
+                )
+        except redis.RedisError:
+            raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
+        return JSONResponse(status_code=202, content={"queued": len(rows), "connectorId": connector_id})
+
+    @app.post("/api/v1/connectors/vector-store/reindex")
+    def vector_store_reindex() -> JSONResponse:
+        return reindex_all()
+
+    @app.post("/api/v1/connectors/vector-store/cleanup")
+    def vector_store_cleanup() -> JSONResponse:
+        return cleanup()
+
+    @app.get("/api/v1/engineer/embedding")
+    def get_embedding() -> JSONResponse:
+        with app.state.db.connect() as conn:
+            stored = app_settings_row(conn)["requested_model"]
+        return JSONResponse(
+            {
+                "model": app.state.settings.model,
+                "device": app.state.settings.device,
+                "requestedModel": stored,
+            }
+        )
+
+    @app.put("/api/v1/engineer/embedding")
+    async def put_embedding(request: Request) -> JSONResponse:
+        try:
+            payload = EmbeddingIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The embedding body is invalid.") from None
+        try:
+            stored_points = app.state.vectors.count()
+        except QdrantUnavailable:
+            raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
+        if payload.model != app.state.settings.model and stored_points > 0:
+            raise PushRefusal(400, "INDEX_CONFIG_MISMATCH", _MODEL_CHANGE)
+        with app.state.db.connect() as conn:
+            save_requested_model(conn, payload.model)
+            conn.commit()
+        return JSONResponse(
+            {
+                "model": app.state.settings.model,
+                "requestedModel": payload.model,
+                "restartRequired": payload.model != app.state.settings.model,
+            }
+        )
+
+    @app.get("/api/v1/engineer/upload-limit")
+    def get_upload_limit() -> JSONResponse:
+        with app.state.db.connect() as conn:
+            row = app_settings_row(conn)
+        return JSONResponse({"maxBytes": int(row["max_upload_bytes"])})
+
+    @app.put("/api/v1/engineer/upload-limit")
+    async def put_upload_limit(request: Request) -> JSONResponse:
+        try:
+            payload = UploadLimitIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The upload limit body is invalid.") from None
+        with app.state.db.connect() as conn:
+            row = save_upload_limit(conn, payload.maxBytes)
+            conn.commit()
+        return JSONResponse({"maxBytes": int(row["max_upload_bytes"])})
+
     return app
 
 
@@ -553,9 +715,10 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
         old_raw, old_stored = _read_pair(previous)
         raw_path, stored_path = write_payload(directory, kb_id, str(rid), raw, prepared.stored)
         wrote = True
+        auto_index = bool(app_settings_row(conn)["auto_index"])
         if decision.action == "create":
-            status = apply(None, "push", has_text=has_text).status
-            event = None if mismatch and has_text else "newRecord"
+            status = hold_for_manual(apply(None, "push", has_text=has_text).status, auto_index=auto_index, has_text=has_text)
+            event = None if (mismatch and has_text) or status == "AUTO_INDEX_OFF" else "newRecord"
             publish_it = status == "QUEUED" and not mismatch
             conn.execute(
                 """
@@ -593,9 +756,13 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
             label = "updated"
             changed = False
         else:
-            status = apply(previous["indexing_status"], "push", has_text=has_text).status
-            event = None if mismatch else "updateRecord"
-            publish_it = not mismatch
+            status = hold_for_manual(
+                apply(previous["indexing_status"], "push", has_text=has_text).status,
+                auto_index=auto_index,
+                has_text=has_text,
+            )
+            event = None if mismatch or status == "AUTO_INDEX_OFF" else "updateRecord"
+            publish_it = status == "QUEUED" and not mismatch
             delete_chunks_for(conn, rid)
             rebuild_bm25(conn)
             conn.execute(
@@ -859,6 +1026,15 @@ def _pipeshub_record(row) -> dict:
         record["embedDone"] = status["embedDone"]
         record["embedTotal"] = status["embedTotal"]
     return {"record": record, "knowledgeBase": {"id": row["kb_id"]}}
+
+
+def _local_body(row) -> dict:
+    folders = row["folders"] if isinstance(row["folders"], list) else json.loads(row["folders"])
+    return {
+        "folders": folders,
+        "includeSubfolders": bool(row["include_subfolders"]),
+        "autoIndex": bool(row["auto_index"]),
+    }
 
 
 def _status_body(row) -> dict:

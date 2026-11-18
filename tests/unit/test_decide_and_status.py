@@ -8,7 +8,7 @@ and the missing transition table noted in test_viewpoints.md gap 7.
 import pytest
 
 from kbindex.decide import decide
-from kbindex.status import apply
+from kbindex.status import apply, hold_for_manual
 
 
 @pytest.mark.parametrize(
@@ -73,6 +73,13 @@ def test_reprocess_and_lifecycle():
     refused = apply("IN_PROGRESS", "reprocess")
     assert refused.refused == "IN_PROGRESS" and refused.status == "IN_PROGRESS"
     assert apply("COMPLETED", "delete").refused == "RECORD_GONE"
+
+
+def test_manual_indexing_holds_a_new_text_record():
+    assert hold_for_manual("QUEUED", auto_index=False, has_text=True) == "AUTO_INDEX_OFF"
+    assert hold_for_manual("QUEUED", auto_index=True, has_text=True) == "QUEUED"
+    assert hold_for_manual("EMPTY", auto_index=False, has_text=False) == "EMPTY"
+    assert apply("AUTO_INDEX_OFF", "reprocess").status == "QUEUED"
 
 
 def test_claim_only_from_queued():

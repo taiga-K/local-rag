@@ -194,7 +194,7 @@ class Engine:
                 update records
                 set indexing_status = 'IN_PROGRESS', failure_reason = null, updated_at = now()
                 where record_id = %s and version = %s and content_rev = %s
-                  and indexing_status in ('QUEUED', 'IN_PROGRESS', 'FAILED', 'COMPLETED', 'EMPTY')
+                  and indexing_status in ('QUEUED', 'IN_PROGRESS', 'FAILED', 'COMPLETED', 'EMPTY', 'AUTO_INDEX_OFF')
                 returning stored_path, record_name, source_modified_ms, version, content_rev
                 """,
                 (rid, event_version, event_rev),
