@@ -22,13 +22,6 @@ def _settings(**over) -> Settings:
         model="cl-nagoya/ruri-v3-310m",
         device="cpu",
         backend="sentence-transformers",
-        tokenizers=("sudachi", "char_bigram"),
-        sudachi_mode="C",
-        sudachi_normalize=True,
-        fusion_method="rrf",
-        fusion_k=60,
-        bm25_k1=1.2,
-        bm25_b=0.75,
         api_port=43123,
     )
     base.update(over)
@@ -60,7 +53,7 @@ def test_content_type_and_length():
 
 
 def test_retrieve_bounds():
-    assert parse_retrieve({"query": "東京"})["limit"] == 10
+    assert parse_retrieve({"query": "東京"})["limit"] == 8
     parsed = parse_retrieve({
         "query": "  東京  ",
         "limit": 1,
@@ -75,7 +68,7 @@ def test_retrieve_bounds():
         parse_retrieve({"query": "東京", "limit": 0})
     assert low.value.status == 422
     with pytest.raises(PushRefusal) as high:
-        parse_retrieve({"query": "東京", "limit": 11})
+        parse_retrieve({"query": "東京", "limit": 51})
     assert high.value.status == 422
     assert parse_retrieve({"query": "東京", "limit": 10})["limit"] == 10
     with pytest.raises(PushRefusal) as unknown:
@@ -92,20 +85,10 @@ def test_retrieve_bounds():
     assert day["bounds"]["modified_before"].tzinfo is not None
 
 
-def test_tuning_defaults_are_config(tmp_path):
+def test_redis_lanes_are_config(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_text(
-        "bm25:\n  k1: 1.5\n  b: 0.4\nkeyword:\n  char_bigram:\n    casefold: true\n    drop_punct: true\nredis:\n  lanes: 8\n",
-        encoding="utf-8",
-    )
-    loaded = load_settings(str(path))
-    assert (loaded.bm25_k1, loaded.bm25_b, loaded.bigram_casefold, loaded.bigram_drop_punct, loaded.redis_lanes) == (
-        1.5,
-        0.4,
-        True,
-        True,
-        8,
-    )
+    path.write_text("redis:\n  lanes: 8\n", encoding="utf-8")
+    assert load_settings(str(path)).redis_lanes == 8
     path.write_text("redis:\n  lanes: 0\n", encoding="utf-8")
     with pytest.raises(SystemExit):
         load_settings(str(path))
@@ -122,43 +105,24 @@ def test_lane_names_follow_pipeshub():
     assert placed in names[1:]
 
 
-def test_fusion_k_is_config(tmp_path):
-    path = tmp_path / "config.yaml"
-    path.write_text("fusion:\n  method: rrf\n  k: 2\n", encoding="utf-8")
-    assert load_settings(str(path)).fusion_k == 2
-    path.write_text("fusion:\n  method: dbsf\n", encoding="utf-8")
-    with pytest.raises(SystemExit):
-        load_settings(str(path))
+def test_retrieve_limit_defaults_to_eight_and_rejects_51():
+    assert parse_retrieve({"query": "首都"})["limit"] == 8
+    assert parse_retrieve({"query": "首都", "limit": 50})["limit"] == 50
+    assert parse_retrieve({"query": "首都", "limit": 1})["limit"] == 1
+    with pytest.raises(PushRefusal) as high:
+        parse_retrieve({"query": "首都", "limit": 51})
+    assert high.value.status == 422
 
 
-def test_query_and_document_prefixes_differ():
+def test_query_and_document_are_the_same_string():
     from kbindex.embed import FakeEmbedder
 
     embedder = FakeEmbedder()
     text = "東京都の天気"
-    assert embedder.embed_query(text) != embedder.embed_documents([text])[0]
+    assert embedder.embed_query(text) == embedder.embed_documents([text])[0]
 
 
-def test_fingerprint_ignores_device_and_bm25():
-    cpu = _settings(device="cpu", bm25_k1=1.2)
-    cuda = _settings(device="cuda", bm25_k1=2.0)
-    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) == cuda.index_fingerprint(
-        hidden_size=768, max_seq_length=8192
-    )
-    renamed = _settings(model="other")
-    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) != renamed.index_fingerprint(
-        hidden_size=768, max_seq_length=8192
-    )
-    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) == _settings(fusion_k=2).index_fingerprint(
-        hidden_size=768, max_seq_length=8192
-    )
-    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) != _settings(fusion_method="other").index_fingerprint(
-        hidden_size=768, max_seq_length=8192
-    )
-    punct = _settings(bigram_drop_punct=True)
-    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) != punct.index_fingerprint(
-        hidden_size=768, max_seq_length=8192
-    )
-    assert cpu.index_fingerprint(hidden_size=768, max_seq_length=8192) == _settings(redis_lanes=8, bm25_b=0.5).index_fingerprint(
-        hidden_size=768, max_seq_length=8192
-    )
+def test_shipped_config_is_the_embedding_example():
+    loaded = load_settings("config.yaml")
+    assert loaded.model == "cl-nagoya/ruri-v3-310m"
+    assert loaded.device == "cpu"

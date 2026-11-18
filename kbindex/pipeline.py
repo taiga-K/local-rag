@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import uuid
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from qdrant_client.http import models as qm
 
-from kbindex.bm25 import Corpus
 from kbindex.chunking import chunk_blocks
 from kbindex.config import Settings
 from kbindex.contract import Envelope, block_text, blocks_digest, content_rev, properties_of, request_digest, stored_bytes
@@ -20,24 +19,23 @@ from kbindex.db import (
     Database,
     bm25_rows,
     chunk_public_id,
-    clear_postings,
     delete_chunks_for,
     generation_row,
     hydrate_chunks,
     insert_chunks,
-    insert_postings,
+    insert_weighted_postings,
     queue_records_with_text,
     rebuild_bm25,
     record_id_for,
-    record_of_chunk,
+    write_generation,
     replace_graph,
     replace_groups,
-    write_generation,
 )
 from kbindex.embed import Embedder
+from kbindex.fastembed_bm25 import document_weights, query_terms
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
+from kbindex.retrieve_cut import finish_retrieve, leg_depth
 from kbindex.rrf import rrf_scores
-from kbindex.tokenize import char_bigrams, sudachi_terms
 
 
 @dataclass(frozen=True)
@@ -72,21 +70,6 @@ def write_payload(directory: Path, kb_id: str, record_id: str, raw: bytes, store
     return str(raw_path), str(stored_path)
 
 
-def _terms(settings: Settings, name: str, text: str) -> list[str]:
-    if name == "sudachi":
-        return sudachi_terms(text, mode=settings.sudachi_mode, normalize=settings.sudachi_normalize)
-    if name == "char_bigram":
-        return char_bigrams(
-            text,
-            nfkc=settings.bigram_nfkc,
-            casefold=settings.bigram_casefold,
-            drop_space=settings.bigram_drop_space,
-            drop_control=settings.bigram_drop_control,
-            drop_punct=settings.bigram_drop_punct,
-        )
-    return []
-
-
 def texts_of_stored(payload: dict) -> list[tuple[int, str, str]]:
     """`(index, type, indexable text)` for each stored block. Images keep an empty text."""
     out = []
@@ -117,56 +100,13 @@ class Engine:
         self.db = db
         self.vectors = vectors
         self.embedder = embedder
-        self.fingerprint = settings.index_fingerprint(hidden_size=embedder.dim, max_seq_length=embedder.max_seq_length)
-
-    def fingerprint_mismatch(self) -> bool:
-        with self.db.connect() as conn:
-            row = generation_row(conn)
-        if row is None:
-            return False
-        return row["fingerprint"] != self.fingerprint
 
     def ensure_generation(self) -> None:
-        """Insert the current fingerprint when the table is empty. Leave a mismatch alone."""
-        with self.db.connect() as conn:
-            row = generation_row(conn)
-            if row is None:
-                write_generation(
-                    conn,
-                    fingerprint=self.fingerprint,
-                    model=self.settings.model,
-                    dimension=self.embedder.dim,
-                    max_seq_length=self.embedder.max_seq_length,
-                    keyword={"tokenizers": list(self.settings.tokenizers), "mode": self.settings.sudachi_mode, "normalize": self.settings.sudachi_normalize},
-                    fusion={"method": self.settings.fusion_method, "k": self.settings.fusion_k},
-                )
-                conn.commit()
-            elif row["fingerprint"] != self.fingerprint:
-                try:
-                    if self.vectors.count() > 0:
-                        return
-                    self.vectors.drop()
-                except QdrantUnavailable:
-                    return
-                write_generation(
-                    conn,
-                    fingerprint=self.fingerprint,
-                    model=self.settings.model,
-                    dimension=self.embedder.dim,
-                    max_seq_length=self.embedder.max_seq_length,
-                    keyword={"tokenizers": list(self.settings.tokenizers), "mode": self.settings.sudachi_mode, "normalize": self.settings.sudachi_normalize},
-                    fusion={"method": self.settings.fusion_method, "k": self.settings.fusion_k},
-                )
-                conn.commit()
+        """Create the collection at the loaded model's dimension. Do not rebuild it."""
         try:
             self.vectors.ensure(self.embedder.dim)
         except QdrantUnavailable:
             return
-
-    def config_refused(self) -> bool:
-        if not self.fingerprint_mismatch():
-            return False
-        return self.vectors.count() > 0
 
     def capture_index(self) -> dict:
         """Copy vectors, chunks, postings, and statuses before a full rebuild."""
@@ -247,23 +187,12 @@ class Engine:
                 )
             conn.commit()
 
-    def reindex(self) -> tuple[str, list]:
-        self.vectors.drop()
-        self.vectors.ensure(self.embedder.dim)
+    def queue_reindex(self) -> list:
+        """Re-embed stored records without dropping the collection. One row per record."""
         with self.db.connect() as conn:
-            clear_postings(conn)
-            write_generation(
-                conn,
-                fingerprint=self.fingerprint,
-                model=self.settings.model,
-                dimension=self.embedder.dim,
-                max_seq_length=self.embedder.max_seq_length,
-                keyword={"tokenizers": list(self.settings.tokenizers), "mode": self.settings.sudachi_mode, "normalize": self.settings.sudachi_normalize},
-                fusion={"method": self.settings.fusion_method, "k": self.settings.fusion_k},
-            )
             rows = queue_records_with_text(conn)
             conn.commit()
-        return self.fingerprint, rows
+        return rows
 
     def index_record(self, kb_id: str, external_record_id: str, *, event_version: int, event_rev: str) -> str:
         rid = record_id_for(kb_id, external_record_id)
@@ -298,15 +227,23 @@ class Engine:
 
     def _finish_empty(self, rid, event_version: int, event_rev: str) -> str:
         with self.db.connect() as conn:
-            row = conn.execute("select version, content_rev from records where record_id = %s for update", (rid,)).fetchone()
-            if row is None or row["version"] != event_version or row["content_rev"] != event_rev:
+            row = conn.execute(
+                "select version, content_rev, indexing_status from records where record_id = %s for update",
+                (rid,),
+            ).fetchone()
+            if (
+                row is None
+                or row["version"] != event_version
+                or row["content_rev"] != event_rev
+                or row["indexing_status"] != "IN_PROGRESS"
+            ):
                 conn.rollback()
                 return "stale"
             delete_chunks_for(conn, rid)
             rebuild_bm25(conn)
             conn.execute(
                 """
-                update records set indexing_status = 'EMPTY', failure_reason = null, updated_at = now()
+                update records set indexing_status = 'EMPTY', has_indexed_copy = false, failure_reason = null, updated_at = now()
                 where record_id = %s and version = %s
                 """,
                 (rid, event_version),
@@ -322,7 +259,7 @@ class Engine:
     def _finish_chunks(self, rid, kb_id, updated, pieces, vectors, event_version, event_rev, payload) -> str:
         chunk_rows = []
         points = []
-        token_docs: dict[str, dict[str, list[str]]] = {name: {} for name in self.settings.tokenizers}
+        sparse_docs: dict[str, list[tuple[str, float]]] = {}
         counts: dict[int, int] = {}
         for piece in pieces:
             counts[piece.block_index] = counts.get(piece.block_index, 0) + 1
@@ -349,10 +286,12 @@ class Engine:
                     payload=payload_out,
                 )
             )
-            for name in self.settings.tokenizers:
-                token_docs[name][cid] = _terms(self.settings, name, piece.text)
+            sparse_docs[cid] = document_weights(piece.text)
         with self.db.connect() as conn:
-            row = conn.execute("select version, content_rev from records where record_id = %s for update", (rid,)).fetchone()
+            row = conn.execute(
+                "select version, content_rev, indexing_status from records where record_id = %s for update",
+                (rid,),
+            ).fetchone()
             if row is None:
                 conn.rollback()
                 try:
@@ -360,13 +299,13 @@ class Engine:
                 except QdrantUnavailable:
                     pass
                 return "gone"
-            if row["version"] != event_version or row["content_rev"] != event_rev:
+            if row["version"] != event_version or row["content_rev"] != event_rev or row["indexing_status"] != "IN_PROGRESS":
                 conn.rollback()
                 return "stale"
             try:
                 self.vectors.delete_record(str(rid))
                 self.vectors.ensure(self.embedder.dim)
-                self.vectors.upsert(points)
+                self.vectors.upsert(points, expected_dim=self.embedder.dim)
             except QdrantUnavailable:
                 conn.execute(
                     """
@@ -382,13 +321,13 @@ class Engine:
             replace_groups(conn, rid, groups_of(payload))
             delete_chunks_for(conn, rid)
             insert_chunks(conn, rid, chunk_rows)
-            for name, docs in token_docs.items():
-                insert_postings(conn, name, docs)
+            insert_weighted_postings(conn, "fastembed", sparse_docs, length_from_weight=False)
             rebuild_bm25(conn)
             conn.execute(
                 """
-                update records set indexing_status = 'COMPLETED', failure_reason = null, updated_at = now()
-                where record_id = %s and version = %s
+                update records set indexing_status = 'COMPLETED', has_indexed_copy = true,
+                  failure_reason = null, updated_at = now()
+                where record_id = %s and version = %s and indexing_status = 'IN_PROGRESS'
                 """,
                 (rid, event_version),
             )
@@ -417,39 +356,35 @@ class Engine:
             )
             conn.commit()
 
-    def search(self, query: str, *, limit: int, kb_ids: list[str] | None, max_per_record: int | None, bounds: dict) -> dict:
-        # Each branch fetches branch_depth(limit) before fusion. PipesHub's
-        # Qdrant prefetch uses limit*2 for one dense and one sparse leg
-        # (qdrant/utils.py L280-L301 at acc3095). Keyword legs are Postgres
-        # BM25, one per tokenizer, restricted to filters.kb before the cut.
-        depth = branch_depth(limit)
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        kb_ids: list[str] | None,
+        max_per_record: int | None,
+        bounds: dict,
+    ) -> dict:
+        depth = leg_depth(limit, max_per_record)
         dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=depth, kb_ids=kb_ids)
-        keyword_pairs: dict[str, list[tuple[str, float]]] = {}
-        for name in ("sudachi", "char_bigram"):
-            if name in self.settings.tokenizers:
-                keyword_pairs[name] = self._bm25(name, query, depth, kb_ids)
-            else:
-                keyword_pairs[name] = []
-        lists = [[cid for cid, _score in dense_pairs]]
-        for name in self.settings.tokenizers:
-            lists.append([cid for cid, _score in keyword_pairs.get(name, [])])
-        ranked = rrf_scores(lists, k=self.settings.fusion_k)
+        sparse_pairs = self._fastembed(query, depth, kb_ids)
+        ranked = rrf_scores(
+            [[cid for cid, _score in dense_pairs], [cid for cid, _score in sparse_pairs]],
+            k=1,
+        )
         fused = self._filter_fused(ranked, kb_ids, bounds)
-        if max_per_record is not None:
-            kept = []
-            seen: Counter[str] = Counter()
-            for cid, score, row in fused:
-                record = record_of_chunk(cid)
-                if seen[record] >= max_per_record:
-                    continue
-                seen[record] += 1
-                kept.append((cid, score, row))
-            fused = kept
-        limited = fused[:limit]
+        limited = finish_retrieve(
+            fused,
+            page_limit=limit,
+            query=query,
+            max_per_record=max_per_record,
+            record_of=lambda item: str(item[2]["record_id"]),
+            text_of=lambda item: item[2]["text"],
+        )
         return {
             "chunks": [self._chunk_json(item) for item in limited],
             "dense": dense_pairs,
-            "keyword": keyword_pairs,
+            "keyword": {"fastembed": sparse_pairs},
             "fused": fused,
             "incomplete": False,
         }
@@ -465,6 +400,9 @@ class Engine:
             if row is None:
                 continue
             if kb_ids and row["kb_id"] not in kb_ids:
+                continue
+            visible = row["indexing_status"] == "COMPLETED" or bool(row.get("has_indexed_copy"))
+            if not visible:
                 continue
             if not _in_bounds(row, bounds):
                 continue
@@ -495,29 +433,24 @@ class Engine:
             },
         }
 
-    def _bm25(self, tokenizer: str, query: str, limit: int, kb_ids: list[str] | None = None) -> list[tuple[str, float]]:
-        terms = _terms(self.settings, tokenizer, query)
+    def _fastembed(self, query: str, limit: int, kb_ids: list[str] | None) -> list[tuple[str, float]]:
+        """fastembed document weight times the recompute IDF. Not Okapi."""
+        terms = query_terms(query)
         if not terms:
             return []
         with self.db.connect() as conn:
-            stats, df_rows, posts = bm25_rows(conn, tokenizer, list(set(terms)), kb_ids)
-        if not stats or stats["doc_count"] == 0:
+            stats, df_rows, posts = bm25_rows(conn, "fastembed", terms, kb_ids)
+        if not stats or int(stats["doc_count"]) == 0:
             return []
-        corpus = Corpus(k1=self.settings.bm25_k1, b=self.settings.bm25_b)
-        corpus.doc_count = int(stats["doc_count"])
-        corpus.total_tokens = int(stats["total_tokens"])
-        for row in df_rows:
-            corpus.df[row["term"]] = int(row["df"])
-        by_doc: dict[str, list] = {}
+        n_docs = int(stats["doc_count"])
+        df = {row["term"]: int(row["df"]) for row in df_rows}
+        scores: dict[str, float] = {}
         for row in posts:
-            by_doc.setdefault(row["chunk_id"], []).append(row)
-        for cid, triples in by_doc.items():
-            counts: Counter[str] = Counter()
-            for row in triples:
-                counts[row["term"]] = int(row["tf"])
-            corpus.tf[cid] = counts
-            corpus.lengths[cid] = int(triples[0]["doc_len"])
-        return corpus.rank(terms)[:limit]
+            n = df.get(row["term"], 0)
+            idf = math.log((n_docs - n + 0.5) / (n + 0.5) + 1.0)
+            scores[row["chunk_id"]] = scores.get(row["chunk_id"], 0.0) + float(row["tf"]) * idf
+        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        return [(chunk_id, score) for chunk_id, score in ranked if score > 0][:limit]
 
 
 def parent_of(payload: dict, index: int) -> int | None:

@@ -161,103 +161,15 @@ class _Vectors:
         self.points.extend(points)
 
 
-def test_reindex_does_not_drop_when_redis_is_already_down():
+def test_old_full_reindex_route_is_gone():
+    """Config A replaced POST /api/v1/index/reindex with the flag-gated vector-store routes."""
     app = create_app()
     app.router.on_startup.clear()
     app.state.db = _DB({"records": [], "chunks": [], "postings": []})
     app.state.redis = _RedisDown()
-    calls = []
-
-    class Spy:
-        def reindex(self):
-            calls.append("reindex")
-            return "fp", []
-
-    app.state.engine = Spy()
     with TestClient(app) as client:
         response = client.post("/api/v1/index/reindex")
-    assert response.status_code == 503, response.text
-    assert response.json()["error"]["reason"] == "REDIS_UNAVAILABLE"
-    assert calls == []
-
-
-def test_reindex_restores_the_snapshot_when_publish_fails():
-    settings = load_settings()
-    kept = "rec-kept"
-    empty = "rec-empty"
-    store = {
-        "records": [
-            {
-                "record_id": kept,
-                "kb_id": "kb",
-                "external_record_id": "doc-1",
-                "version": 1,
-                "content_rev": "c1",
-                "indexing_status": "COMPLETED",
-                "failure_reason": None,
-            },
-            {
-                "record_id": empty,
-                "kb_id": "kb",
-                "external_record_id": "blank",
-                "version": 1,
-                "content_rev": "e",
-                "indexing_status": "EMPTY",
-                "failure_reason": None,
-            },
-        ],
-        "chunks": [
-            {
-                "chunk_id": "chunk-1",
-                "record_id": kept,
-                "block_id": None,
-                "block_index": 0,
-                "piece": 0,
-                "text": "本文",
-                "token_count": 2,
-            }
-        ],
-        "postings": [
-            {
-                "generation": 1,
-                "tokenizer": "sudachi",
-                "term": "本文",
-                "chunk_id": "chunk-1",
-                "tf": 1,
-                "doc_len": 2,
-            }
-        ],
-        "generation": {
-            "fingerprint": "old-fp",
-            "model": "cl-nagoya/ruri-v3-310m",
-            "dimension": 32,
-            "max_seq_length": 8192,
-            "keyword_json": {"tokenizers": ["sudachi"]},
-            "fusion_json": {"method": "rrf", "k": 60},
-        },
-    }
-    vectors = _Vectors([_Point("p1", kept)])
-    app = create_app(settings)
-    app.router.on_startup.clear()
-    app.state.db = _DB(store)
-    app.state.redis = _RedisPublishFails()
-    app.state.vectors = vectors
-    engine = Engine(settings, app.state.db, vectors, FakeEmbedder())
-    engine.embedder.dim = 8
-    app.state.engine = engine
-    with TestClient(app) as client:
-        response = client.post("/api/v1/index/reindex")
-    assert response.status_code == 503, response.text
-    assert response.json()["error"]["reason"] == "REDIS_UNAVAILABLE"
-    assert [row["text"] for row in store["chunks"]] == ["本文"]
-    assert [row["term"] for row in store["postings"]] == ["本文"]
-    assert [point.id for point in vectors.points] == ["p1"]
-    statuses = {row["record_id"]: row["indexing_status"] for row in store["records"]}
-    assert statuses == {kept: "COMPLETED", empty: "EMPTY"}
-    assert store["generation"]["fingerprint"] == "old-fp"
-    assert store["generation"]["dimension"] == 32
-    assert vectors.ensured[-1] == 32
-    assert vectors.drops >= 2
+    assert response.status_code == 404, response.text
 
 
 def test_restore_index_accepts_a_generation_with_null_dimension():
@@ -307,74 +219,6 @@ def test_restore_index_accepts_a_generation_with_null_dimension():
     assert store["records"][0]["failure_reason"] is None
     assert [point.id for point in vectors.points] == ["p1"]
     assert vectors.ensured == [8]
-
-
-def test_reindex_deletes_events_published_before_redis_fails():
-    settings = load_settings()
-    store = {
-        "records": [
-            {
-                "record_id": "r1",
-                "kb_id": "kb",
-                "external_record_id": "a",
-                "version": 1,
-                "content_rev": "c",
-                "indexing_status": "COMPLETED",
-                "failure_reason": None,
-            },
-            {
-                "record_id": "r2",
-                "kb_id": "kb",
-                "external_record_id": "b",
-                "version": 1,
-                "content_rev": "c",
-                "indexing_status": "COMPLETED",
-                "failure_reason": None,
-            },
-        ],
-        "chunks": [],
-        "postings": [],
-        "generation": {
-            "fingerprint": "old-fp",
-            "model": "m",
-            "dimension": 32,
-            "max_seq_length": 8192,
-            "keyword_json": {},
-            "fusion_json": {},
-        },
-    }
-
-    class _RedisFailsMidway:
-        def __init__(self):
-            self.deleted = []
-
-        def ping(self):
-            return True
-
-        def xadd(self, *_args, **_kwargs):
-            if self.deleted is not None and getattr(self, "sent", 0):
-                raise redis.RedisError("down")
-            self.sent = 1
-            return "1-0"
-
-        def xdel(self, stream, *ids):
-            self.deleted.append((stream, ids))
-            return len(ids)
-
-    redis_client = _RedisFailsMidway()
-    vectors = _Vectors([])
-    app = create_app(settings)
-    app.router.on_startup.clear()
-    app.state.db = _DB(store)
-    app.state.redis = redis_client
-    app.state.vectors = vectors
-    app.state.engine = Engine(settings, app.state.db, vectors, FakeEmbedder())
-    with TestClient(app) as client:
-        response = client.post("/api/v1/index/reindex")
-    assert response.status_code == 503, response.text
-    assert redis_client.deleted
-    assert redis_client.deleted[0][1] == ("1-0",)
-    assert store["generation"]["fingerprint"] == "old-fp"
 
 
 def test_restore_points_upserts_a_dense_named_vector():

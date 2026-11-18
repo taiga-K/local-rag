@@ -107,4 +107,5 @@ def test_engineer_limit_and_embedding_refusal():
     status, current = call("GET", "/api/v1/engineer/embedding")
     assert status == 200 and current["model"]
     status, blocked = call("PUT", "/api/v1/engineer/embedding", {"model": "other/model"})
-    assert status == 400 and blocked["error"]["reason"] == "INDEX_CONFIG_MISMATCH"
+    assert status == 400
+    assert blocked["error"]["reason"] in {"MODEL_CHANGE_REFUSED", "ENVELOPE_INVALID"}

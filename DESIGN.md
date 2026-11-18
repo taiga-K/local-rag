@@ -511,7 +511,13 @@ BM25 は Okapi である。`bm25.k1` の既定は 1.2、`bm25.b` の既定は 0.
 
 ## ノートで閉じた判断
 
-`rag_requirements.md`（taiga、2026-11-18 承認）が次を決めている。Sudachi モード C と `normalize: true`、RRF の k=60、チャンク方針 B、リランカ無し、Qdrant、Postgres、Redis Streams、ruri-v3-310m、モデル変更とキーワード方式の変更は全件入れ直し。`normalize: true` は Sudachi の `normalized_form` とする。`rag_sparse_compare.md` の表 A が「Sudachi C 単位 内容語＋正規化形」をその名前で測っている。内容語への絞り込みはノートが決めていないので、品詞では落とさない。
+`rag_requirements.md` の L13・L14・L31 は 2026-11-18 19:47 JST に config A へ改訂された。設定例は `embedding: {model: cl-nagoya/ruri-v3-310m, device: cpu}` だけである。キーワードは fastembed `Qdrant/bm25` の 1 本で、RRF は Qdrant の `1/(position+2)`（0 始まり）に固定する。Sudachi と文字バイグラムは製品から外す。チャンク方針 B、リランカ無し、Qdrant、Postgres、Redis Streams、ruri-v3-310m はそのままである。モデル名または次元が違い、点が 1 つでも残っていれば設定変更は 400 で拒み、自動では入れ直さない。点が 0 ならコレクションを新しい次元で作り直して受け付ける。
+
+ベクトルストアの cleanup と reindex は `ENABLE_VECTOR_STORE_REBUILD=true` のときだけ動く。既定は false である。有効にするには API とワーカーの環境変数に `ENABLE_VECTOR_STORE_REBUILD=true` を置いて起動し直す。
+
+## 後回し
+
+管理者だけに制限することは対象外である。認証がまだ無い。cleanup、vector-store reindex、モデル変更はエンジニア向け API のままで、Electron には出さない。認証を足すときに制限する。
 
 `gui_settings_scope.md`（PipesHub `acc3095`）が次を決めている。HNSW `ef` 256、oversampling 1.5、検索画面の件数 10。retrieve の上限は、この依頼が「既定 10、上限 10」と指定したので 10 にする。PipesHub の `RetrieveQuery` 自体は既定 8、上限 50 である（`search.py`）。埋め込みモデルは、点が残っているあいだ変更できない（`embedding_switch_docs.md`）。
 
@@ -529,14 +535,15 @@ taiga が寝ているあいだ、`rag_requirements.md` に無い細部は PipesH
 
 1. 決定: 融合前の候補深さは `max(limit * 2, 64)` にする。証拠: JQaRA の external id `4210070`（チャンク `db93f5c3-b144-506f-9287-ecf03b424228:0`）は Sudachi 順位 1、文字バイグラム順位 1、密順位 21 だった。`limit * 2` が 20 のとき密の枝に入らず、k=60 の RRF は `2/61` で融合順位 15 になり、ハーネスの上位 10 から外れた。密順位が 20 を超えた自己検索は 1999 件中 5 件で、最悪は 32, 32, 28, 24, 21。深さ 64 のあと、その 5 件の融合順位は 3, 1, 1, 4, 3 になった。戻し方: `branch_depth` を `return limit * 2` に戻す。
 2. 決定: BM25 の候補は、上位 N を切る前に `filters.kb` のポスティングだけを残す。文書頻度は全体のまま。証拠: クエリ「スイス連邦の首都はどこ？」の全体 Sudachi 上位 64 は、jsquad-k60 が 24、jqara-k60 が 22、miracl-k60 が 18 だった。密検索はもともと kb で絞る。`filters.kb` は、他の kb が候補枠を埋めないという意味である。この絞り込みのあと MIRACL の nDCG@10 は PipesHub+ruri に届いていない。品質の穴を埋めるための変更ではなく、フィルタの正しさである。戻し方: `bm25_rows` の kb 述語を外す。
-3. 決定: デスクトップのフォルダ、下位を含むか、自動索引は Postgres の `app_settings` 1 行に置く。証拠: PipesHub の Local FS は個人コネクタの設定であり、API コンテナからは利用者のディスクを読めない（`gui_settings_scope.md` の Local FS、`local_fs/connector.py` L466-L518）。戻し方: `app_settings` を消し、`GET/PUT /api/v1/settings/local` を外す。
-4. 決定: 自動索引がオフの新規本文は `AUTO_INDEX_OFF` になり、ワーカーへ流さない。再索引で `QUEUED` に戻す。証拠: Manual Indexing が ON のとき `AUTO_INDEX_OFF` になる（`local_fs/connector.py` L1351-L1356、`acc3095`）。戻し方: `hold_for_manual` を常に素通しにする。
-5. 決定: 埋め込みモデルの変更は、点が残っているあいだ 400 `INDEX_CONFIG_MISMATCH`。点が無いときだけ希望の名前を保存し、動いているプロセスは起動時のモデルのままにする。証拠: PipesHub は点が残っているあいだモデルを替えない（`embedding_switch_docs.md`）。こちらはモデルをプロセス起動時に読む。戻し方: `PUT /api/v1/engineer/embedding` を外す。
-6. 決定: アップロード上限は `app_settings.max_upload_bytes`。既定と上限は 16 MiB。エンジニア API だけが変える。証拠: Labs の `fileUploadMaxSizeBytes` は管理者専用（`gui_settings_scope.md`、`cm_controller.ts` L1046-L1095）。戻し方: `admit` の `limit` を外し、定数だけを見る。
-7. 決定: 全削除と全再埋め込みは `POST /api/v1/connectors/vector-store/cleanup` と `POST /api/v1/connectors/vector-store/reindex`。画面には出さない。証拠: Labs の同じ操作（`gui_settings_scope.md`、`POST /api/v1/connectors/vector-store/cleanup` と `reindex`）。戻し方: この2つの別名を外す。既存の `/api/v1/index/cleanup` と `/api/v1/index/reindex` は残る。
-
-8. 決定: Electron に出すのはフォルダ、自動索引、再索引、取り込み状況だけ。証拠: 一般利用者の項目は個人コネクタの索引設定、再索引、状態表示である（`gui_settings_scope.md` 3 章）。管理者項目は画面に置かない。戻し方: `apps/settings/src/view.ts` の `SCREENS` を見る。
-9. 決定: API はリクエストの `Origin` をそのまま `Access-Control-Allow-Origin` に返す。証拠: 画面は `http://127.0.0.1:43124` から `43123` を呼ぶ。CORS ヘッダが無い GET は Electron で `Failed to fetch` になった。パッケージした画面の origin は `null` である。戻し方: `CORSMiddleware` を外す。
+3. 決定: このブランチは PipesHub `426fc25` の retrieve 経路に揃える。接頭辞は付けない。タイトルは付けない。`maxChunksPerRecord` があるときの各脚は 80 件（`limit` 10 なら内部は `min(10*4, 200)=40`、prefetch はその 2 倍。`search.py` L128-L141、L798）。RRF は 1 始まりで `fusion.k=1`、式は `1/(rank+1)` で、0 始まりの `1/(pos+2)` と同じ。`fusion.k=2` ではない。戻し方: `config.yaml` の `fusion.k` を 60 に戻し、`branch_depth` を `max(limit*2, 64)` に戻し、`embed.py` の接頭辞を戻す。根拠の衝突: `DESIGN.md` の「ノートで閉じた判断」は `rag_requirements.md` が k=60 を指定したと書く。そのファイルはこの木に無い。この依頼は式 `1/(pos+2)` を A と B の両方に使うと名指ししたので、計測の k は 1 にする。
+4. 決定: 索引は Sudachi、文字バイグラム、fastembed `Qdrant/bm25`（引数なし、0.9.1）を全部積む。検索の脚は `search.legs` で切り替える。これはフィンガープリントに入れない。A は `dense` と `fastembed`。B は `dense` と `sudachi` と `char_bigram`。C は `dense` だけ。fastembed の得点は Okapi ではなく、文書重み × `log((N-n+0.5)/(n+0.5)+1)`。戻し方: `search.legs` を消し、`keyword.tokenizers` から `fastembed` を外す。
+5. 決定: デスクトップのフォルダ、下位を含むか、自動索引は Postgres の `app_settings` 1 行に置く。証拠: PipesHub の Local FS は個人コネクタの設定であり、API コンテナからは利用者のディスクを読めない（`gui_settings_scope.md` の Local FS、`local_fs/connector.py` L466-L518）。戻し方: `app_settings` を消し、`GET/PUT /api/v1/settings/local` を外す。
+6. 決定: 自動索引がオフの新規本文は `AUTO_INDEX_OFF` になり、ワーカーへ流さない。再索引で `QUEUED` に戻す。証拠: Manual Indexing が ON のとき `AUTO_INDEX_OFF` になる（`local_fs/connector.py` L1351-L1356、`acc3095`）。戻し方: `hold_for_manual` を常に素通しにする。
+7. 決定: 埋め込みモデルの変更は、点が残っているあいだ 400 `INDEX_CONFIG_MISMATCH`。点が無いときだけ希望の名前を保存し、動いているプロセスは起動時のモデルのままにする。証拠: PipesHub は点が残っているあいだモデルを替えない（`embedding_switch_docs.md`）。こちらはモデルをプロセス起動時に読む。戻し方: `PUT /api/v1/engineer/embedding` を外す。
+8. 決定: アップロード上限は `app_settings.max_upload_bytes`。既定と上限は 16 MiB。エンジニア API だけが変える。証拠: Labs の `fileUploadMaxSizeBytes` は管理者専用（`gui_settings_scope.md`、`cm_controller.ts` L1046-L1095）。戻し方: `admit` の `limit` を外し、定数だけを見る。
+9. 決定: 全削除と全再埋め込みは `POST /api/v1/connectors/vector-store/cleanup` と `POST /api/v1/connectors/vector-store/reindex`。画面には出さない。証拠: Labs の同じ操作（`gui_settings_scope.md`、`POST /api/v1/connectors/vector-store/cleanup` と `reindex`）。戻し方: この2つの別名を外す。既存の `/api/v1/index/cleanup` と `/api/v1/index/reindex` は残る。
+10. 決定: Electron に出すのはフォルダ、自動索引、再索引、取り込み状況だけ。証拠: 一般利用者の項目は個人コネクタの索引設定、再索引、状態表示である（`gui_settings_scope.md` 3 章）。管理者項目は画面に置かない。戻し方: `apps/settings/src/view.ts` の `SCREENS` を見る。
+11. 決定: API はリクエストの `Origin` をそのまま `Access-Control-Allow-Origin` に返す。証拠: 画面は `http://127.0.0.1:43124` から `43123` を呼ぶ。CORS ヘッダが無い GET は Electron で `Failed to fetch` になった。パッケージした画面の origin は `null` である。戻し方: `CORSMiddleware` を外す。
 
 ## 未決
 

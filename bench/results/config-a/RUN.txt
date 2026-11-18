@@ -1,0 +1,16 @@
+Product-path re-run of config A on a fresh Postgres, Redis, and Qdrant.
+The live bench database and its Qdrant collection were not touched.
+
+Harness: bench/standalone_bench.py run
+  --base-url http://127.0.0.1:43129
+  --wait-seconds 14400
+  --cache data/cache
+Subsets, in order, each on its own empty collection:
+  jqara-dev-s40   --kb jqara-a   --sanity-kb jqara-a-sanity
+  miracl-ja-dev-s30 --kb miracl-a --sanity-kb miracl-a-sanity
+  jsquad-valid-s40  --kb jsquad-a  --sanity-kb jsquad-a-sanity
+
+The harness sends limit 10 and maxChunksPerRecord 1. Each subset's
+self-check waits until every document's text[:80] is in that retrieve's
+top 10. A timeout would have failed the run. All three finished with
+exit 0.

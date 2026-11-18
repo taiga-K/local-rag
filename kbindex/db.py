@@ -101,7 +101,7 @@ create table if not exists bm25_postings (
   tokenizer text not null,
   term text not null,
   chunk_id text not null,
-  tf int not null,
+  tf double precision not null,
   doc_len int not null,
   primary key (generation, tokenizer, term, chunk_id)
 );
@@ -129,6 +129,8 @@ ALTERS = (
     )
     """,
     "insert into app_settings (id) values (1) on conflict (id) do nothing",
+    "alter table records add column if not exists has_indexed_copy boolean not null default false",
+    "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
 
 
@@ -204,7 +206,7 @@ def lock_record(conn, record_id):
 
 
 def counts_for(conn, kb_id: str) -> dict[str, int]:
-    names = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "AUTO_INDEX_OFF")
+    names = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "AUTO_INDEX_OFF", "NOT_STARTED")
     out = {name: 0 for name in names}
     rows = conn.execute(
         "select indexing_status, count(*) as n from records where kb_id = %s group by indexing_status",
@@ -477,10 +479,23 @@ def insert_chunks(conn, record_id, rows: list[tuple[str, int, int, str, int]]) -
 
 
 def insert_postings(conn, tokenizer: str, docs: dict[str, list[str]]) -> None:
-    for chunk_id, terms in docs.items():
-        counts = Counter(terms)
-        doc_len = sum(counts.values())
-        for term, tf in counts.items():
+    weighted = {
+        chunk_id: [(term, float(tf)) for term, tf in Counter(terms).items()]
+        for chunk_id, terms in docs.items()
+    }
+    insert_weighted_postings(conn, tokenizer, weighted, length_from_weight=True)
+
+
+def insert_weighted_postings(
+    conn,
+    tokenizer: str,
+    docs: dict[str, list[tuple[str, float]]],
+    *,
+    length_from_weight: bool,
+) -> None:
+    for chunk_id, pairs in docs.items():
+        doc_len = int(sum(weight for _term, weight in pairs)) if length_from_weight else len(pairs)
+        for term, weight in pairs:
             conn.execute(
                 """
                 insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
@@ -488,7 +503,7 @@ def insert_postings(conn, tokenizer: str, docs: dict[str, list[str]]) -> None:
                 on conflict (generation, tokenizer, term, chunk_id)
                 do update set tf = excluded.tf, doc_len = excluded.doc_len
                 """,
-                (tokenizer, term, chunk_id, tf, doc_len),
+                (tokenizer, term, chunk_id, weight, doc_len),
             )
 
 
@@ -562,7 +577,9 @@ def hydrate_chunks(conn, chunk_ids: list[str]):
     return conn.execute(
         """
         select c.chunk_id, c.text, c.block_index, c.piece, c.token_count,
-               r.record_id, r.external_record_id, r.record_name, r.kb_id, r.source_modified_ms, r.created_at, r.updated_at
+               r.record_id, r.external_record_id, r.record_name, r.kb_id,
+               r.indexing_status, r.has_indexed_copy,
+               r.source_modified_ms, r.created_at, r.updated_at
         from chunks c
         join records r on r.record_id = c.record_id
         where c.chunk_id = any(%s)

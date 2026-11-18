@@ -1,0 +1,76 @@
+{
+  "label": "measured",
+  "dataset": "jsquad-valid-s40",
+  "n_queries": 40,
+  "n_documents": 1145,
+  "n_errors": 0,
+  "n_empty": 0,
+  "requested_depth": 10,
+  "result_cap": 50,
+  "rankings_stable_across_repeats": true,
+  "metrics": {
+    "recall@1": {
+      "value": 0.9,
+      "label": "measured",
+      "n": 40
+    },
+    "recall@5": {
+      "value": 0.925,
+      "label": "measured",
+      "n": 40
+    },
+    "recall@10": {
+      "value": 0.95,
+      "label": "measured",
+      "n": 40
+    },
+    "ndcg@10": {
+      "value": 0.9246784235169869,
+      "label": "measured",
+      "n": 40
+    },
+    "mrr@10": {
+      "value": 0.9166666666666666,
+      "label": "measured",
+      "n": 40
+    },
+    "recall@20": {
+      "value": null,
+      "label": "not_measurable",
+      "reason": "the run requests 10 hits, so Recall@20 is not computed"
+    }
+  },
+  "latency_ms": {
+    "repeats": 5,
+    "p50": {
+      "median": 137.73919999948703,
+      "min": 132.9930499996408,
+      "max": 140.86368199787103
+    },
+    "p95": {
+      "median": 182.95645600301214,
+      "min": 173.4882610035129,
+      "max": 192.7039939982933
+    },
+    "p99": {
+      "median": 198.84522699430818,
+      "min": 174.67141399538377,
+      "max": 579.1954460000852
+    }
+  },
+  "index_seconds": null,
+  "sanity": {
+    "passed": null,
+    "note": "scored after indexing; the 80-character self-check was not required"
+  },
+  "conditions": {
+    "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
+    "seed": 20261117,
+    "limit": 10,
+    "repeats": 5,
+    "metrics": "ranx recall@1,recall@5,recall@10,ndcg@10,mrr@10",
+    "latency": "nearest-rank",
+    "self_check": "skipped"
+  }
+}

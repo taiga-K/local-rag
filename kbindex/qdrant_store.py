@@ -86,7 +86,29 @@ class Vectors:
 
         self._call(remove)
 
-    def upsert(self, points: list[qm.PointStruct]) -> None:
+    def vector_size(self) -> int | None:
+        def run() -> int | None:
+            if COLLECTION not in self._names():
+                return None
+            info = self.client.get_collection(COLLECTION)
+            params = info.config.params.vectors
+            if isinstance(params, dict):
+                dense = params.get("dense")
+                return None if dense is None else int(dense.size)
+            return int(params.size)
+
+        return self._call(run)
+
+    def upsert(self, points: list[qm.PointStruct], expected_dim: int | None = None) -> None:
+        if expected_dim is not None:
+            for point in points:
+                vector = point.vector
+                if isinstance(vector, dict):
+                    vector = vector.get("dense")
+                if vector is not None and len(list(vector)) != expected_dim:
+                    raise QdrantUnavailable(
+                        f"vector dimension {len(list(vector))} does not match collection {expected_dim}"
+                    )
         if not points:
             return
         self._call(lambda: self.client.upsert(collection_name=COLLECTION, points=points))

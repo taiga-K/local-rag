@@ -73,15 +73,11 @@ curl -s -X POST http://127.0.0.1:43123/api/v1/retrieve \
 
 `kbindex-ingest load` は同じ push を JSONL から繰り返す。完了は `GET /api/v1/kb/{kb_id}/indexing/counts` の `QUEUED` と `IN_PROGRESS` が 0 になるまで待つ。
 
-指紋が違うベクトルが残っているあいだ、検索は 400 `INDEX_CONFIG_MISMATCH` である。入れ直しは次の 1 コマンドである。
-
-```bash
-curl -sS -X POST http://127.0.0.1:43123/api/v1/index/reindex
-```
+ベクトルストアの作り直しは既定で止まっている。有効にするには API の環境変数 `ENABLE_VECTOR_STORE_REBUILD=true` を置いて起動し直す。そのあと、空のコレクションに戻すのは `POST /api/v1/connectors/vector-store/cleanup`、保存済み本文から埋め直すのは `POST /api/v1/connectors/vector-store/reindex` である。点が残っているあいだモデル名の変更は 400 で、自動では入れ直さない。
 
 `scripts/measure.py` は `--run` を付け、API が応答するときだけ計測する。付けないときは終了コード 2 で、時間は出さない。
 
-融合は RRF だけである。既定の `fusion.k` は 60 である。Qdrant サーバ既定の 2 と比べるときは `config.yaml` の `fusion.k` を 2 にして API とワーカーを起動し直す。再索引は要らない。k は保存するベクトルを変えない。
+融合は RRF だけである。式は Qdrant の `1/(position+2)`（position は 0 始まり）で、設定では変えない。キーワードは fastembed の `Qdrant/bm25` だけである。
 
 索引の状態は `GET /api/v1/knowledgeBase/record/{recordId}` と `GET /api/v1/records/{recordId}` が返す。件数は `GET /api/v1/connectors/{kbId}/stats` の `data.stats.indexingStatus` である。再処理は `POST /api/v1/records/{recordId}/reindex` である。
 
