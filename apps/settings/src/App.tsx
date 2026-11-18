@@ -3,6 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
+import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { loadSettings, listKnowledgeBases, loadStatus, reindexConnector, saveSettings, type RecordRow } from "./api";
@@ -66,7 +67,7 @@ export function App() {
       {screen === "folders" ? (
         <VStack gap={2}>
           <Text>取り込むフォルダを1行に1つ書きます。下の階層も含めるかは次のボタンです。</Text>
-          <TextInput label="フォルダ" value={folders} onChange={(value) => setFolders(value)} />
+          <TextArea label="フォルダ" value={folders} rows={4} onChange={(value) => setFolders(value)} />
           <Button
             label={includeSubfolders ? "下の階層も含める" : "そのフォルダだけ"}
             onClick={() => {
