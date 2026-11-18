@@ -267,6 +267,7 @@ PipesHub の push 統合は `backend/python/tests/integration/graph_db/test_kb_p
 | `test_debug_japanese_bm25_and_dense` | 同値分割 | 索引語を含む日本語の問いでは、そのチャンクの `sudachi` か `char_bigram` が null でない。索引語を含まない日本語の問いでは、返ったチャンクのキーワード脚は null で `dense` がある | `test_qdrant_integration.py` の `test_hybrid_sparse_dense_query`。穴 4 |
 | `test_index_config_mismatch_then_reindex` | 状態遷移、エラー網羅 | 保存した指紋を壊すと検索は 400 `INDEX_CONFIG_MISMATCH`。メッセージに `POST /api/v1/index/reindex` がある。そのコマンドのあと 200 | `integration-tests/resilience/test_vector_store_rebuild.py` |
 | `test_inspection_paths` | 同値分割、エラー網羅 | `GET /api/v1/records/{id}` と `GET /api/v1/knowledgeBase/record/{id}` の `record.indexingStatus` が一致する。`GET /api/v1/connectors/{kb}/stats` の `data.stats.total` は `indexingStatus` の合計と一致する。未知のコネクタは 404 | `integration_test_connector_sync_lifecycle.py` の stats。`integration_test_knowledgebase_records_crud.py` の `GET /api/v1/knowledgeBase/record/{id}` |
+| `test_desktop_origin_is_reflected` | エラー網羅 | `Origin: http://127.0.0.1:43124` の GET が同じ値を `Access-Control-Allow-Origin` に返す | 画面テストは無い。Electron は別オリジンから API を呼ぶ |
 | `test_local_settings_round_trip_and_manual_hold` | 状態遷移 | フォルダと自動索引を保存して GET が同じ。オフの push は `AUTO_INDEX_OFF`。コネクタ再索引は 202 で `queued` が 1 | Local FS の Manual Indexing。`local_fs/connector.py` L1351-L1356。対応する画面テストは無い |
 | `test_engineer_limit_and_embedding_refusal` | 境界値分析、エラー網羅 | 上限を 32 にするとより大きい本文は 413 `PAYLOAD_TOO_LARGE`。点が残っているモデル変更は 400 `INDEX_CONFIG_MISMATCH` | Labs のファイル上限と埋め込み変更。画面には出さない。対応する PipesHub のデスクトップテストは無い |
 

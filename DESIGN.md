@@ -535,6 +535,9 @@ taiga が寝ているあいだ、`rag_requirements.md` に無い細部は PipesH
 6. 決定: アップロード上限は `app_settings.max_upload_bytes`。既定と上限は 16 MiB。エンジニア API だけが変える。証拠: Labs の `fileUploadMaxSizeBytes` は管理者専用（`gui_settings_scope.md`、`cm_controller.ts` L1046-L1095）。戻し方: `admit` の `limit` を外し、定数だけを見る。
 7. 決定: 全削除と全再埋め込みは `POST /api/v1/connectors/vector-store/cleanup` と `POST /api/v1/connectors/vector-store/reindex`。画面には出さない。証拠: Labs の同じ操作（`gui_settings_scope.md`、`POST /api/v1/connectors/vector-store/cleanup` と `reindex`）。戻し方: この2つの別名を外す。既存の `/api/v1/index/cleanup` と `/api/v1/index/reindex` は残る。
 
+8. 決定: Electron に出すのはフォルダ、自動索引、再索引、取り込み状況だけ。証拠: 一般利用者の項目は個人コネクタの索引設定、再索引、状態表示である（`gui_settings_scope.md` 3 章）。管理者項目は画面に置かない。戻し方: `apps/settings/src/view.ts` の `SCREENS` を見る。
+9. 決定: API はリクエストの `Origin` をそのまま `Access-Control-Allow-Origin` に返す。証拠: 画面は `http://127.0.0.1:43124` から `43123` を呼ぶ。CORS ヘッダが無い GET は Electron で `Failed to fetch` になった。パッケージした画面の origin は `null` である。戻し方: `CORSMiddleware` を外す。
+
 ## 未決
 
 残っていない。

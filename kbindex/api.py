@@ -12,6 +12,7 @@ from pathlib import Path
 import psycopg
 import redis
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -236,6 +237,14 @@ def parse_retrieve(body: object) -> dict:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="kbindex")
+    # The desktop renderer is another origin (the Vite port, or "null" for a
+    # packaged file:// window). Reflect whatever Origin it sends.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.settings = settings
     app.state.db = Database(settings.database_url)
 
