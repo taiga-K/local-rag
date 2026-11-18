@@ -54,7 +54,7 @@ def publish(
     version: int,
     content_rev: str,
     lanes: int = 1,
-) -> None:
+) -> tuple[str, str]:
     payload = json.dumps(
         {
             "recordId": record_id,
@@ -65,14 +65,16 @@ def publish(
         },
         ensure_ascii=False,
     )
-    client.xadd(
-        publish_stream(record_id, lanes),
+    stream = publish_stream(record_id, lanes)
+    message_id = client.xadd(
+        stream,
         {
             "eventType": event_type,
             "payload": payload,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         },
     )
+    return stream, str(message_id)
 
 
 def read_event(fields: dict) -> dict:

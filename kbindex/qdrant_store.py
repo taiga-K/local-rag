@@ -91,24 +91,32 @@ class Vectors:
             return
         self._call(lambda: self.client.upsert(collection_name=COLLECTION, points=points))
 
+    def scroll_all(self) -> list:
+        """Every point in the collection, including vectors. Empty when it is missing."""
+        return self._scroll(None)
+
     def scroll_record(self, record_id: str) -> list:
         """Points whose payload recordId matches, including vectors."""
+        filt = qm.Filter(must=[qm.FieldCondition(key="recordId", match=qm.MatchValue(value=record_id))])
+        return self._scroll(filt)
 
+    def _scroll(self, filt: qm.Filter | None) -> list:
         def run() -> list:
             if COLLECTION not in self._names():
                 return []
-            filt = qm.Filter(must=[qm.FieldCondition(key="recordId", match=qm.MatchValue(value=record_id))])
             found: list = []
             offset = None
             while True:
-                batch, offset = self.client.scroll(
-                    collection_name=COLLECTION,
-                    scroll_filter=filt,
-                    limit=128,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=True,
-                )
+                kwargs: dict = {
+                    "collection_name": COLLECTION,
+                    "limit": 128,
+                    "offset": offset,
+                    "with_payload": True,
+                    "with_vectors": True,
+                }
+                if filt is not None:
+                    kwargs["scroll_filter"] = filt
+                batch, offset = self.client.scroll(**kwargs)
                 found.extend(batch)
                 if offset is None:
                     break
