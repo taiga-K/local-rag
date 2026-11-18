@@ -101,7 +101,7 @@ create table if not exists bm25_postings (
   tokenizer text not null,
   term text not null,
   chunk_id text not null,
-  tf int not null,
+  tf double precision not null,
   doc_len int not null,
   primary key (generation, tokenizer, term, chunk_id)
 );
@@ -118,6 +118,7 @@ ALTERS = (
     "alter table bm25_stats add column if not exists avgdl double precision not null default 0",
     "alter table records add column if not exists embed_done int",
     "alter table records add column if not exists embed_total int",
+    "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
 
 
@@ -308,10 +309,23 @@ def insert_chunks(conn, record_id, rows: list[tuple[str, int, int, str, int]]) -
 
 
 def insert_postings(conn, tokenizer: str, docs: dict[str, list[str]]) -> None:
-    for chunk_id, terms in docs.items():
-        counts = Counter(terms)
-        doc_len = sum(counts.values())
-        for term, tf in counts.items():
+    weighted = {
+        chunk_id: [(term, float(tf)) for term, tf in Counter(terms).items()]
+        for chunk_id, terms in docs.items()
+    }
+    insert_weighted_postings(conn, tokenizer, weighted, length_from_weight=True)
+
+
+def insert_weighted_postings(
+    conn,
+    tokenizer: str,
+    docs: dict[str, list[tuple[str, float]]],
+    *,
+    length_from_weight: bool,
+) -> None:
+    for chunk_id, pairs in docs.items():
+        doc_len = int(sum(weight for _term, weight in pairs)) if length_from_weight else len(pairs)
+        for term, weight in pairs:
             conn.execute(
                 """
                 insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
@@ -319,7 +333,7 @@ def insert_postings(conn, tokenizer: str, docs: dict[str, list[str]]) -> None:
                 on conflict (generation, tokenizer, term, chunk_id)
                 do update set tf = excluded.tf, doc_len = excluded.doc_len
                 """,
-                (tokenizer, term, chunk_id, tf, doc_len),
+                (tokenizer, term, chunk_id, weight, doc_len),
             )
 
 

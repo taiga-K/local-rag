@@ -124,12 +124,20 @@ def test_fusion_k_is_config(tmp_path):
         load_settings(str(path))
 
 
-def test_query_and_document_prefixes_differ():
+def test_query_and_document_are_the_same_string():
     from kbindex.embed import FakeEmbedder
 
     embedder = FakeEmbedder()
     text = "東京都の天気"
-    assert embedder.embed_query(text) != embedder.embed_documents([text])[0]
+    assert embedder.embed_query(text) == embedder.embed_documents([text])[0]
+
+
+def test_legs_selects_named_retrievers():
+    parsed = parse_retrieve({"query": "首都", "legs": ["dense", "sudachi"]})
+    assert parsed["legs"] == ("dense", "sudachi")
+    with pytest.raises(PushRefusal) as unknown:
+        parse_retrieve({"query": "首都", "legs": ["sparse"]})
+    assert unknown.value.status == 400
 
 
 def test_fingerprint_ignores_device_and_bm25():

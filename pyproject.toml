@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 embed = [
   "sentence-transformers>=3.3",
+  "fastembed==0.9.1",
 ]
 dev = [
   "pytest>=8.3",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import uuid
 from collections import Counter
@@ -14,7 +15,7 @@ from qdrant_client.http import models as qm
 
 from kbindex.bm25 import Corpus
 from kbindex.chunking import chunk_blocks
-from kbindex.config import Settings
+from kbindex.config import Settings, live_search_legs
 from kbindex.contract import Envelope, block_text, blocks_digest, content_rev, properties_of, request_digest, stored_bytes
 from kbindex.db import (
     Database,
@@ -26,6 +27,7 @@ from kbindex.db import (
     hydrate_chunks,
     insert_chunks,
     insert_postings,
+    insert_weighted_postings,
     queue_records_with_text,
     rebuild_bm25,
     record_id_for,
@@ -35,6 +37,7 @@ from kbindex.db import (
     write_generation,
 )
 from kbindex.embed import Embedder
+from kbindex.fastembed_bm25 import document_weights, query_terms
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
 from kbindex.rrf import rrf_scores
 from kbindex.tokenize import char_bigrams, sudachi_terms
@@ -243,7 +246,8 @@ class Engine:
     def _finish_chunks(self, rid, kb_id, updated, pieces, vectors, event_version, event_rev, payload) -> str:
         chunk_rows = []
         points = []
-        token_docs: dict[str, dict[str, list[str]]] = {name: {} for name in self.settings.tokenizers}
+        token_docs: dict[str, dict[str, list[str]]] = {name: {} for name in self.settings.tokenizers if name != "fastembed"}
+        sparse_docs: dict[str, list[tuple[str, float]]] = {}
         counts: dict[int, int] = {}
         for piece in pieces:
             counts[piece.block_index] = counts.get(piece.block_index, 0) + 1
@@ -270,8 +274,10 @@ class Engine:
                     payload=payload_out,
                 )
             )
-            for name in self.settings.tokenizers:
+            for name in token_docs:
                 token_docs[name][cid] = _terms(self.settings, name, piece.text)
+            if "fastembed" in self.settings.tokenizers:
+                sparse_docs[cid] = document_weights(piece.text)
         with self.db.connect() as conn:
             row = conn.execute("select version, content_rev from records where record_id = %s for update", (rid,)).fetchone()
             if row is None:
@@ -305,6 +311,8 @@ class Engine:
             insert_chunks(conn, rid, chunk_rows)
             for name, docs in token_docs.items():
                 insert_postings(conn, name, docs)
+            if "fastembed" in self.settings.tokenizers:
+                insert_weighted_postings(conn, "fastembed", sparse_docs, length_from_weight=False)
             rebuild_bm25(conn)
             conn.execute(
                 """
@@ -338,21 +346,38 @@ class Engine:
             )
             conn.commit()
 
-    def search(self, query: str, *, limit: int, kb_ids: list[str] | None, max_per_record: int | None, bounds: dict) -> dict:
-        # Each branch fetches branch_depth(limit) before fusion. PipesHub's
-        # Qdrant prefetch uses limit*2 for one dense and one sparse leg
-        # (qdrant/utils.py L280-L301 at acc3095). Keyword legs are Postgres
-        # BM25, one per tokenizer, restricted to filters.kb before the cut.
-        depth = branch_depth(limit)
-        dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=depth, kb_ids=kb_ids)
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        kb_ids: list[str] | None,
+        max_per_record: int | None,
+        bounds: dict,
+        legs: tuple[str, ...] | None = None,
+    ) -> dict:
+        # With maxChunksPerRecord, each leg prefetches min(limit*4, 200)*2.
+        # limit 10 and a cap of 1 is 80. PipesHub retrieve does that
+        # (search.py L128-L141, L798, then qdrant/utils.py L265-L313 at 426fc25).
+        # `legs` is query-time. The index still stores every tokenizer.
+        depth = branch_depth(limit, max_per_record)
+        selected = legs if legs is not None else live_search_legs(self.settings)
+        wanted = set(selected) if selected is not None else None
+        use_dense = wanted is None or "dense" in wanted
+        dense_pairs = (
+            self.vectors.search(self.embedder.embed_query(query), limit=depth, kb_ids=kb_ids) if use_dense else []
+        )
         keyword_pairs: dict[str, list[tuple[str, float]]] = {}
-        for name in ("sudachi", "char_bigram"):
-            if name in self.settings.tokenizers:
+        active = [name for name in self.settings.tokenizers if wanted is None or name in wanted]
+        for name in ("sudachi", "char_bigram", "fastembed"):
+            if name in active:
                 keyword_pairs[name] = self._bm25(name, query, depth, kb_ids)
             else:
                 keyword_pairs[name] = []
-        lists = [[cid for cid, _score in dense_pairs]]
-        for name in self.settings.tokenizers:
+        lists: list[list[str]] = []
+        if use_dense:
+            lists.append([cid for cid, _score in dense_pairs])
+        for name in active:
             lists.append([cid for cid, _score in keyword_pairs.get(name, [])])
         ranked = rrf_scores(lists, k=self.settings.fusion_k)
         fused = self._filter_fused(ranked, kb_ids, bounds)
@@ -417,6 +442,8 @@ class Engine:
         }
 
     def _bm25(self, tokenizer: str, query: str, limit: int, kb_ids: list[str] | None = None) -> list[tuple[str, float]]:
+        if tokenizer == "fastembed":
+            return self._fastembed(query, limit, kb_ids)
         terms = _terms(self.settings, tokenizer, query)
         if not terms:
             return []
@@ -439,6 +466,25 @@ class Engine:
             corpus.tf[cid] = counts
             corpus.lengths[cid] = int(triples[0]["doc_len"])
         return corpus.rank(terms)[:limit]
+
+    def _fastembed(self, query: str, limit: int, kb_ids: list[str] | None) -> list[tuple[str, float]]:
+        """fastembed document weight times the recompute IDF. Not Okapi."""
+        terms = query_terms(query)
+        if not terms:
+            return []
+        with self.db.connect() as conn:
+            stats, df_rows, posts = bm25_rows(conn, "fastembed", terms, kb_ids)
+        if not stats or int(stats["doc_count"]) == 0:
+            return []
+        n_docs = int(stats["doc_count"])
+        df = {row["term"]: int(row["df"]) for row in df_rows}
+        scores: dict[str, float] = {}
+        for row in posts:
+            n = df.get(row["term"], 0)
+            idf = math.log((n_docs - n + 0.5) / (n + 0.5) + 1.0)
+            scores[row["chunk_id"]] = scores.get(row["chunk_id"], 0.0) + float(row["tf"]) * idf
+        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        return [(chunk_id, score) for chunk_id, score in ranked if score > 0][:limit]
 
 
 def parent_of(payload: dict, index: int) -> int | None:
@@ -480,15 +526,16 @@ def _ms(moment: datetime) -> int:
     return int(moment.timestamp() * 1000)
 
 
-def branch_depth(limit: int) -> int:
+def branch_depth(limit: int, max_per_record: int | None = None) -> int:
     """Hits each retriever returns before RRF.
 
-    PipesHub prefetches ``limit * 2``. A keyword-only hit whose dense rank is
-    just outside that window scores as if dense never saw it. At k=60 that
-    drops a rank-1 keyword passage out of the top 10. The floor of 64 keeps
-    those near misses in the fusion.
+    PipesHub's retrieve with maxChunksPerRecord reads ``min(limit * 4, 200)``
+    passages (search.py L128-L141 and L798 at 426fc25) and each prefetch is
+    twice that (qdrant/utils.py L265-L313). limit 10 and maxChunksPerRecord 1
+    therefore prefetch 80. Without the cap, the prefetch is ``limit * 2``.
     """
-    return max(limit * 2, 64)
+    fetch = limit if max_per_record is None else min(limit * 4, 200)
+    return fetch * 2
 
 
 def has_indexable_text(envelope: Envelope) -> bool:

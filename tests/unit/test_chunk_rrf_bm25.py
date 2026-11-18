@@ -14,7 +14,7 @@ from kbindex.config import Settings
 from kbindex.contract import block_text, parse_envelope
 from kbindex.db import chunk_public_id
 from kbindex.embed import FakeEmbedder
-from kbindex.pipeline import Engine
+from kbindex.pipeline import Engine, branch_depth
 from kbindex.rrf import rrf_scores
 from kbindex.tokenize import char_bigrams, sudachi_terms
 
@@ -129,12 +129,22 @@ def test_rrf_tie_keeps_input_order():
     assert dict(rrf_scores([["a"], ["a"]], k=60))["a"] == pytest_approx(2 / 61)
 
 
+def test_retrieve_cap_prefetches_eighty_per_leg():
+    """limit 10 and maxChunksPerRecord 1 read 40, then each leg prefetches 80.
+
+    PipesHub: search.py L128-L141 and L798 at 426fc25, then utils.py L265-L313.
+    """
+    assert branch_depth(10, None) == 20
+    assert branch_depth(10, 1) == 80
+    assert branch_depth(4, None) == 8
+
+
 def test_each_branch_fetches_twice_the_retrieve_limit():
     """Candidate depth is the request limit times 2, then RRF uses fusion.k.
 
-    PipesHub: backend/python/app/services/vector_db/qdrant/utils.py L280-L309
-    at acc3095. One dense prefetch and one sparse prefetch, each limit*2,
-    fused with Fusion.RRF and no k (Qdrant default 2). The approved k here is 60.
+    PipesHub: backend/python/app/services/vector_db/qdrant/utils.py L265-L313
+    at 426fc25. One dense prefetch and one sparse prefetch, each limit*2.
+    Qdrant's default score is 1/(rank0+2), which is fusion.k 1 on 1-based ranks.
     """
     class Vectors:
         def __init__(self) -> None:
@@ -177,11 +187,11 @@ def test_each_branch_fetches_twice_the_retrieve_limit():
         return found, [vectors.limits[0], seen["sudachi"], seen["char_bigram"]]
 
     found, depths = run(60)
-    assert depths == [64, 64, 64]
+    assert depths == [8, 8, 8]
     assert found["chunks"][0]["score"] == pytest_approx(2 / 61)
-    found_k2, depths_k2 = run(2)
-    assert depths_k2 == [64, 64, 64]
-    assert found_k2["chunks"][0]["score"] == pytest_approx(2 / 3)
+    found_k1, depths_k1 = run(1)
+    assert depths_k1 == [8, 8, 8]
+    assert found_k1["chunks"][0]["score"] == pytest_approx(1.0)
 
 
 def _fusion_settings(k: int):

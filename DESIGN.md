@@ -529,6 +529,8 @@ taiga が寝ているあいだ、`rag_requirements.md` に無い細部は PipesH
 
 1. 決定: 融合前の候補深さは `max(limit * 2, 64)` にする。証拠: JQaRA の external id `4210070`（チャンク `db93f5c3-b144-506f-9287-ecf03b424228:0`）は Sudachi 順位 1、文字バイグラム順位 1、密順位 21 だった。`limit * 2` が 20 のとき密の枝に入らず、k=60 の RRF は `2/61` で融合順位 15 になり、ハーネスの上位 10 から外れた。密順位が 20 を超えた自己検索は 1999 件中 5 件で、最悪は 32, 32, 28, 24, 21。深さ 64 のあと、その 5 件の融合順位は 3, 1, 1, 4, 3 になった。戻し方: `branch_depth` を `return limit * 2` に戻す。
 2. 決定: BM25 の候補は、上位 N を切る前に `filters.kb` のポスティングだけを残す。文書頻度は全体のまま。証拠: クエリ「スイス連邦の首都はどこ？」の全体 Sudachi 上位 64 は、jsquad-k60 が 24、jqara-k60 が 22、miracl-k60 が 18 だった。密検索はもともと kb で絞る。`filters.kb` は、他の kb が候補枠を埋めないという意味である。この絞り込みのあと MIRACL の nDCG@10 は PipesHub+ruri に届いていない。品質の穴を埋めるための変更ではなく、フィルタの正しさである。戻し方: `bm25_rows` の kb 述語を外す。
+3. 決定: このブランチは PipesHub `426fc25` の retrieve 経路に揃える。接頭辞は付けない。タイトルは付けない。`maxChunksPerRecord` があるときの各脚は 80 件（`limit` 10 なら内部は `min(10*4, 200)=40`、prefetch はその 2 倍。`search.py` L128-L141、L798）。RRF は 1 始まりで `fusion.k=1`、式は `1/(rank+1)` で、0 始まりの `1/(pos+2)` と同じ。`fusion.k=2` ではない。戻し方: `config.yaml` の `fusion.k` を 60 に戻し、`branch_depth` を `max(limit*2, 64)` に戻し、`embed.py` の接頭辞を戻す。根拠の衝突: `DESIGN.md` の「ノートで閉じた判断」は `rag_requirements.md` が k=60 を指定したと書く。そのファイルはこの木に無い。この依頼は式 `1/(pos+2)` を A と B の両方に使うと名指ししたので、計測の k は 1 にする。
+4. 決定: 索引は Sudachi、文字バイグラム、fastembed `Qdrant/bm25`（引数なし、0.9.1）を全部積む。検索の脚は `search.legs` で切り替える。これはフィンガープリントに入れない。A は `dense` と `fastembed`。B は `dense` と `sudachi` と `char_bigram`。C は `dense` だけ。fastembed の得点は Okapi ではなく、文書重み × `log((N-n+0.5)/(n+0.5)+1)`。戻し方: `search.legs` を消し、`keyword.tokenizers` から `fastembed` を外す。
 
 ## 未決
 

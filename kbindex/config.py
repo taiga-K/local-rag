@@ -32,13 +32,15 @@ class Settings:
     bigram_drop_control: bool = True
     bigram_drop_punct: bool = False
     redis_lanes: int = 1
+    search_legs: tuple[str, ...] | None = None
 
     def index_fingerprint(self, *, hidden_size: int, max_seq_length: int) -> str:
         """Hash of the inputs that change vectors or postings.
 
         `device`, BM25 `k1`/`b`, `fusion.k`, and Redis lane count stay out.
         They do not change stored bytes. Character-bigram flags stay in,
-        because they change the postings.
+        because they change the postings. `noprefix` records that ruri is
+        embedded without a query or document prefix.
         """
         lines = [
             self.model,
@@ -47,8 +49,7 @@ class Settings:
             ",".join(sorted(self.tokenizers)),
             f"{self.sudachi_mode} {str(self.sudachi_normalize).lower()}",
             self.fusion_method,
-            "検索文書: ",
-            "検索クエリ: ",
+            "noprefix",
             " ".join(
                 (
                     "1" if self.bigram_nfkc else "0",
@@ -86,15 +87,26 @@ def load_settings(path: str | None = None) -> Settings:
     if backend not in {"sentence-transformers", "fake"}:
         raise SystemExit("embedding.backend must be sentence-transformers or fake")
     tokenizers = tuple(keyword.get("tokenizers") or ["sudachi", "char_bigram"])
-    if not tokenizers or any(name not in {"sudachi", "char_bigram"} for name in tokenizers):
-        raise SystemExit("keyword.tokenizers must list sudachi, char_bigram, or both")
+    allowed = {"sudachi", "char_bigram", "fastembed"}
+    if not tokenizers or any(name not in allowed for name in tokenizers):
+        raise SystemExit("keyword.tokenizers must list sudachi, char_bigram, or fastembed")
+    search_cfg = raw.get("search") or {}
+    legs_raw = search_cfg.get("legs")
+    search_legs: tuple[str, ...] | None = None
+    if legs_raw is not None:
+        if not isinstance(legs_raw, list) or not legs_raw or any(not isinstance(item, str) for item in legs_raw):
+            raise SystemExit("search.legs must be a non-empty list")
+        allowed_legs = allowed | {"dense"}
+        if any(item not in allowed_legs for item in legs_raw):
+            raise SystemExit("search.legs has an unknown name")
+        search_legs = tuple(dict.fromkeys(legs_raw))
     mode = str(sudachi.get("mode", "C"))
     if mode not in {"A", "B", "C"}:
         raise SystemExit("keyword.sudachi.mode must be A, B, or C")
     normalize = sudachi.get("normalize", True)
     if not isinstance(normalize, bool):
         raise SystemExit("keyword.sudachi.normalize must be a boolean")
-    k = fusion.get("k", 60)
+    k = fusion.get("k", 1)
     if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
         raise SystemExit("fusion.k must be a positive integer")
     k1 = bm25.get("k1", 1.2)
@@ -132,7 +144,35 @@ def load_settings(path: str | None = None) -> Settings:
         bigram_drop_control=_flag(bigram, "drop_control", True),
         bigram_drop_punct=_flag(bigram, "drop_punct", False),
         redis_lanes=lanes,
+        search_legs=search_legs,
     )
+
+
+def live_search_legs(settings: Settings) -> tuple[str, ...] | None:
+    """Re-read search.legs from the config file.
+
+    The bench switches dense+fastembed, dense+Sudachi+bigram, and dense-only
+    by editing that list. It is not part of the index fingerprint.
+    """
+    path = os.environ.get("KBINDEX_CONFIG")
+    if not path or not os.path.exists(path):
+        return settings.search_legs
+    try:
+        with open(path, encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError):
+        return settings.search_legs
+    if not isinstance(loaded, dict):
+        return settings.search_legs
+    legs = (loaded.get("search") or {}).get("legs") if isinstance(loaded.get("search") or {}, dict) else None
+    if legs is None:
+        return settings.search_legs
+    if not isinstance(legs, list) or not legs or any(not isinstance(item, str) for item in legs):
+        return settings.search_legs
+    allowed = {"dense", "sudachi", "char_bigram", "fastembed"}
+    if any(item not in allowed for item in legs):
+        return settings.search_legs
+    return tuple(dict.fromkeys(legs))
 
 
 def _flag(block: dict, name: str, default: bool) -> bool:

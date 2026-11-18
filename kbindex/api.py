@@ -66,7 +66,9 @@ _RETRIEVE_KEYS = {
     "modifiedBefore",
     "maxChunksPerRecord",
     "rewriteQuery",
+    "legs",
 }
+_LEG_NAMES = ("dense", "sudachi", "char_bigram")
 _FILTER_KEYS = {
     "apps",
     "kb",
@@ -157,6 +159,19 @@ def parse_bound(value: object, *, end: bool) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_legs(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+        raise PushRefusal(400, "INVALID_FILTER", "legs must be a non-empty list of leg names.")
+    unknown = [item for item in value if item not in _LEG_NAMES]
+    if unknown:
+        raise PushRefusal(400, "INVALID_FILTER", "legs has an unknown name.")
+    seen: list[str] = []
+    for item in value:
+        if item not in seen:
+            seen.append(item)
+    return tuple(seen)
+
+
 def parse_retrieve(body: object) -> dict:
     if not isinstance(body, dict):
         raise PushRefusal(400, "INVALID_JSON", "The body is not a JSON object.")
@@ -188,6 +203,7 @@ def parse_retrieve(body: object) -> dict:
     max_per = body.get("maxChunksPerRecord")
     if max_per is not None and (isinstance(max_per, bool) or not isinstance(max_per, int) or not 1 <= max_per <= 50):
         raise PushRefusal(422, "LIMIT_OUT_OF_RANGE", "maxChunksPerRecord must be from 1 to 50.")
+    legs = _parse_legs(body.get("legs")) if "legs" in body else None
     renamed = {}
     for key, value in (
         ("createdAfter", "created_after"),
@@ -203,6 +219,7 @@ def parse_retrieve(body: object) -> dict:
         "kb_ids": kb_ids,
         "max_per": max_per,
         "bounds": renamed,
+        "legs": legs,
     }
 
 
@@ -774,6 +791,7 @@ async def _retrieve(app, request: Request, *, debug: bool) -> JSONResponse:
             kb_ids=parsed["kb_ids"],
             max_per_record=parsed["max_per"],
             bounds=parsed["bounds"],
+            legs=parsed["legs"],
         )
     except QdrantUnavailable:
         raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None

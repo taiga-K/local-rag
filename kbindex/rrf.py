@@ -26,7 +26,7 @@ def rrf_scores(
                 order.append(chunk_id)
                 scores[chunk_id] = 0.0
             scores[chunk_id] += 1.0 / (k + index)
-    ranked = sorted(order, key=lambda cid: (-scores[cid], order.index(cid)))
+    ranked = sorted(order, key=lambda cid: (-scores[cid], cid))
     return [(cid, scores[cid]) for cid in ranked]
 
 
