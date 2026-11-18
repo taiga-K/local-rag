@@ -288,6 +288,102 @@ def replace_groups(conn, record_id, groups: list[tuple[int, int | None, str, str
         )
 
 
+def read_record_index(conn, record_id) -> dict:
+    """Copy chunks, postings, and the block graph before they are deleted."""
+    chunks = [
+        dict(row)
+        for row in conn.execute(
+            """
+            select chunk_id, record_id, block_id, block_index, piece, text, token_count
+            from chunks where record_id = %s
+            """,
+            (record_id,),
+        ).fetchall()
+    ]
+    chunk_ids = [row["chunk_id"] for row in chunks]
+    postings: list[dict[str, Any]] = []
+    if chunk_ids:
+        postings = [
+            dict(row)
+            for row in conn.execute(
+                """
+                select generation, tokenizer, term, chunk_id, tf, doc_len
+                from bm25_postings where chunk_id = any(%s)
+                """,
+                (chunk_ids,),
+            ).fetchall()
+        ]
+    blocks = [
+        dict(row)
+        for row in conn.execute(
+            """
+            select block_id, record_id, position, parent_position, group_position, type, text
+            from blocks where record_id = %s
+            """,
+            (record_id,),
+        ).fetchall()
+    ]
+    groups = [
+        dict(row)
+        for row in conn.execute(
+            """
+            select record_id, position, parent_position, type, name
+            from block_groups where record_id = %s
+            """,
+            (record_id,),
+        ).fetchall()
+    ]
+    return {"chunks": chunks, "postings": postings, "blocks": blocks, "groups": groups}
+
+
+def write_record_index(conn, record_id, snap: dict) -> None:
+    """Put a read_record_index snapshot back and rebuild BM25."""
+    conn.execute("delete from blocks where record_id = %s", (record_id,))
+    conn.execute("delete from block_groups where record_id = %s", (record_id,))
+    for row in snap["blocks"]:
+        conn.execute(
+            """
+            insert into blocks (block_id, record_id, position, parent_position, group_position, type, text)
+            values (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                row["block_id"], record_id, row["position"], row["parent_position"],
+                row["group_position"], row["type"], row["text"],
+            ),
+        )
+    for row in snap["groups"]:
+        conn.execute(
+            """
+            insert into block_groups (record_id, position, parent_position, type, name)
+            values (%s, %s, %s, %s, %s)
+            """,
+            (record_id, row["position"], row["parent_position"], row["type"], row["name"]),
+        )
+    for row in snap["chunks"]:
+        conn.execute(
+            """
+            insert into chunks (chunk_id, record_id, block_id, block_index, piece, text, token_count)
+            values (%s, %s, %s, %s, %s, %s, %s)
+            on conflict (chunk_id) do nothing
+            """,
+            (
+                row["chunk_id"], record_id, row["block_id"], row["block_index"],
+                row["piece"], row["text"], row["token_count"],
+            ),
+        )
+    for row in snap["postings"]:
+        conn.execute(
+            """
+            insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
+            values (%s, %s, %s, %s, %s, %s)
+            on conflict (generation, tokenizer, term, chunk_id)
+            do update set tf = excluded.tf, doc_len = excluded.doc_len
+            """,
+            (row["generation"], row["tokenizer"], row["term"], row["chunk_id"], row["tf"], row["doc_len"]),
+        )
+    rebuild_bm25(conn)
+
+
 def delete_chunks_for(conn, record_id) -> None:
     conn.execute(
         "delete from bm25_postings where chunk_id in (select chunk_id from chunks where record_id = %s)",
