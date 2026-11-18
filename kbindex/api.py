@@ -756,12 +756,8 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
             label = "updated"
             changed = False
         else:
-            status = hold_for_manual(
-                apply(previous["indexing_status"], "push", has_text=has_text).status,
-                auto_index=auto_index,
-                has_text=has_text,
-            )
-            event = None if mismatch or status == "AUTO_INDEX_OFF" else "updateRecord"
+            status = apply(previous["indexing_status"], "push", has_text=has_text).status
+            event = None if mismatch else "updateRecord"
             publish_it = status == "QUEUED" and not mismatch
             delete_chunks_for(conn, rid)
             rebuild_bm25(conn)
