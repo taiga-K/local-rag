@@ -260,6 +260,55 @@ def test_reindex_restores_the_snapshot_when_publish_fails():
     assert vectors.drops >= 2
 
 
+def test_restore_index_accepts_a_generation_with_null_dimension():
+    """Nullable dimension and max_seq_length must not abort rollback after the drop."""
+    settings = load_settings()
+    store = {
+        "records": [
+            {"record_id": "r1", "indexing_status": "QUEUED", "failure_reason": "wiped"},
+        ],
+        "chunks": [],
+        "postings": [],
+        "generation": None,
+    }
+    vectors = _Vectors([])
+    engine = Engine(settings, _DB(store), vectors, FakeEmbedder())
+    engine.embedder.dim = 8
+    chunk = {
+        "chunk_id": "chunk-1",
+        "record_id": "r1",
+        "block_id": None,
+        "block_index": 0,
+        "piece": 0,
+        "text": "本文",
+        "token_count": 2,
+    }
+    engine.restore_index(
+        {
+            "points": [_Point("p1", "r1")],
+            "chunks": [chunk],
+            "postings": [],
+            "statuses": [{"record_id": "r1", "indexing_status": "COMPLETED", "failure_reason": None}],
+            "generation": {
+                "fingerprint": "old-fp",
+                "model": "cl-nagoya/ruri-v3-310m",
+                "dimension": None,
+                "max_seq_length": None,
+                "keyword_json": {"tokenizers": ["sudachi"]},
+                "fusion_json": {"method": "rrf", "k": 60},
+            },
+        }
+    )
+    assert store["generation"]["fingerprint"] == "old-fp"
+    assert store["generation"]["dimension"] is None
+    assert store["generation"]["max_seq_length"] is None
+    assert [row["text"] for row in store["chunks"]] == ["本文"]
+    assert store["records"][0]["indexing_status"] == "COMPLETED"
+    assert store["records"][0]["failure_reason"] is None
+    assert [point.id for point in vectors.points] == ["p1"]
+    assert vectors.ensured == [8]
+
+
 def test_reindex_deletes_events_published_before_redis_fails():
     settings = load_settings()
     store = {

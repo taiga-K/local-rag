@@ -209,7 +209,7 @@ def generation_row(conn):
     return conn.execute("select * from index_generation where id = 1").fetchone()
 
 
-def write_generation(conn, *, fingerprint: str, model: str, dimension: int, max_seq_length: int, keyword: dict, fusion: dict) -> None:
+def write_generation(conn, *, fingerprint: str, model: str, dimension: int | None, max_seq_length: int | None, keyword: dict, fusion: dict) -> None:
     conn.execute(
         """
         insert into index_generation (id, fingerprint, model, dimension, max_seq_length, keyword_json, fusion_json, ready)

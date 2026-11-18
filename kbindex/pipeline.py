@@ -240,8 +240,8 @@ class Engine:
                     conn,
                     fingerprint=generation["fingerprint"],
                     model=generation["model"],
-                    dimension=int(generation["dimension"]),
-                    max_seq_length=int(generation["max_seq_length"]),
+                    dimension=_optional_int(generation.get("dimension")),
+                    max_seq_length=_optional_int(generation.get("max_seq_length")),
                     keyword=_json_map(generation.get("keyword_json")),
                     fusion=_json_map(generation.get("fusion_json")),
                 )
@@ -561,6 +561,13 @@ def _ms(moment: datetime) -> int:
 def branch_depth(limit: int) -> int:
     """Hits each retriever returns before RRF. Mirrors PipesHub Prefetch `limit * 2`."""
     return limit * 2
+
+
+def _optional_int(value: object) -> int | None:
+    """Keep a nullable generation column null. int(None) would abort the restore."""
+    if value is None:
+        return None
+    return int(value)
 
 
 def _json_map(value) -> dict:
