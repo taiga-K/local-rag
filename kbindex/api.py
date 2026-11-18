@@ -718,7 +718,7 @@ def _record_points(app, record_id: str) -> list:
     try:
         return list(app.state.vectors.scroll_record(record_id))
     except QdrantUnavailable:
-        return []
+        raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
 
 
 def _restore_files(previous, old_raw: bytes | None, old_stored: bytes | None) -> None:

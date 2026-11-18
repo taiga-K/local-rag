@@ -270,6 +270,41 @@ def test_content_update_restores_chunks_and_points_when_publish_fails(tmp_path):
     assert [point.id for point in vectors.points] == ["p1"]
 
 
+def test_content_update_stops_before_deleting_points_when_the_snapshot_fails(tmp_path):
+    from kbindex.qdrant_store import QdrantUnavailable
+
+    record_id = record_id_for("kb", "doc-1")
+    store = _store(record_id)
+    vectors = _Vectors([_Point("p1", str(record_id))])
+
+    def boom(_record_id):
+        raise QdrantUnavailable("scroll failed")
+
+    vectors.scroll_record = boom
+    settings = replace(load_settings(), data_dir=str(tmp_path))
+    app = create_app(settings)
+    app.router.on_startup.clear()
+    app.state.db = _DB(store)
+    app.state.redis = _RedisPublishFails()
+    app.state.vectors = vectors
+    app.state.engine = _Engine()
+    body = {
+        "recordName": "doc-1",
+        "mimeType": "application/blocks",
+        "externalRecordId": "doc-1",
+        "version": 2,
+        "blocksFormat": 1,
+        "blocks": {"blocks": [{"index": 0, "type": "text", "format": "txt", "data": "新しい本文"}]},
+    }
+    with TestClient(app) as client:
+        response = client.post("/api/v1/kb/kb/records", json=body)
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["reason"] == "QDRANT_UNAVAILABLE"
+    assert store["records"][record_id]["version"] == 1
+    assert [row["text"] for row in store["chunks"]] == ["本文"]
+    assert [point.id for point in vectors.points] == ["p1"]
+
+
 def test_restore_points_upserts_a_dense_named_vector():
     saved = []
 
