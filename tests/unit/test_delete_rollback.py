@@ -249,6 +249,26 @@ def test_delete_restores_chunks_and_points_when_redis_publish_fails():
     assert [point.id for point in vectors.points] == ["p1"]
 
 
+def test_delete_stops_before_removing_points_when_the_snapshot_fails():
+    from kbindex.qdrant_store import QdrantUnavailable
+
+    record_id = record_id_for("kb", "doc-1")
+    store = _store(record_id)
+    vectors = _Vectors([_Point("p1", str(record_id))])
+
+    def boom(_record_id):
+        raise QdrantUnavailable("scroll failed")
+
+    vectors.scroll_record = boom
+    with _client(store, vectors) as client:
+        response = client.delete("/api/v1/kb/kb/records/doc-1")
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["reason"] == "QDRANT_UNAVAILABLE"
+    assert record_id in store["records"]
+    assert [row["text"] for row in store["chunks"]] == ["本文"]
+    assert [point.id for point in vectors.points] == ["p1"]
+
+
 def test_restore_points_upserts_a_dense_named_vector():
     saved = []
 
