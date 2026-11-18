@@ -446,19 +446,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
         except psycopg.Error:
             raise PushRefusal(503, "POSTGRES_UNAVAILABLE", "Postgres is unavailable.") from None
+        published: list[tuple[str, str]] = []
         try:
             for row in rows:
-                publish(
-                    app.state.redis,
-                    "reindexRecord",
-                    record_id=str(row["record_id"]),
-                    kb_id=row["kb_id"],
-                    external_record_id=row["external_record_id"],
-                    version=int(row["version"]),
-                    content_rev=row["content_rev"] or "",
-                    lanes=app.state.settings.redis_lanes,
+                published.append(
+                    publish(
+                        app.state.redis,
+                        "reindexRecord",
+                        record_id=str(row["record_id"]),
+                        kb_id=row["kb_id"],
+                        external_record_id=row["external_record_id"],
+                        version=int(row["version"]),
+                        content_rev=row["content_rev"] or "",
+                        lanes=app.state.settings.redis_lanes,
+                    )
                 )
         except redis.RedisError:
+            for stream, message_id in published:
+                try:
+                    app.state.redis.xdel(stream, message_id)
+                except redis.RedisError:
+                    pass
             app.state.engine.restore_index(snapshot)
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
         return JSONResponse(status_code=202, content={"fingerprint": fingerprint, "queued": len(rows)})

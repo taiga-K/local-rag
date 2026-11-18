@@ -61,7 +61,19 @@ class _Conn:
         if text.startswith("insert into bm25_terms") or text.startswith("insert into bm25_stats"):
             return _Result([])
         if text.startswith("insert into index_generation"):
+            fingerprint, model, dimension, max_seq, keyword_json, fusion_json = params
+            store["generation"] = {
+                "fingerprint": fingerprint,
+                "model": model,
+                "dimension": dimension,
+                "max_seq_length": max_seq,
+                "keyword_json": keyword_json,
+                "fusion_json": fusion_json,
+            }
             return _Result([])
+        if "from index_generation" in text:
+            row = store.get("generation")
+            return _Result([row] if row else [])
         if text.startswith("insert into chunks"):
             keys = ("chunk_id", "record_id", "block_id", "block_index", "piece", "text", "token_count")
             store["chunks"].append(dict(zip(keys, params, strict=True)))
@@ -132,10 +144,12 @@ class _Vectors:
         self.points = list(points)
 
     def drop(self):
+        self.drops = getattr(self, "drops", 0) + 1
         self.points = []
 
-    def ensure(self, _dim):
-        return None
+    def ensure(self, dim):
+        self.ensured = getattr(self, "ensured", [])
+        self.ensured.append(dim)
 
     def count(self):
         return len(self.points)
@@ -213,6 +227,14 @@ def test_reindex_restores_the_snapshot_when_publish_fails():
                 "doc_len": 2,
             }
         ],
+        "generation": {
+            "fingerprint": "old-fp",
+            "model": "cl-nagoya/ruri-v3-310m",
+            "dimension": 32,
+            "max_seq_length": 8192,
+            "keyword_json": {"tokenizers": ["sudachi"]},
+            "fusion_json": {"method": "rrf", "k": 60},
+        },
     }
     vectors = _Vectors([_Point("p1", kept)])
     app = create_app(settings)
@@ -220,7 +242,9 @@ def test_reindex_restores_the_snapshot_when_publish_fails():
     app.state.db = _DB(store)
     app.state.redis = _RedisPublishFails()
     app.state.vectors = vectors
-    app.state.engine = Engine(settings, app.state.db, vectors, FakeEmbedder())
+    engine = Engine(settings, app.state.db, vectors, FakeEmbedder())
+    engine.embedder.dim = 8
+    app.state.engine = engine
     with TestClient(app) as client:
         response = client.post("/api/v1/index/reindex")
     assert response.status_code == 503, response.text
@@ -230,6 +254,78 @@ def test_reindex_restores_the_snapshot_when_publish_fails():
     assert [point.id for point in vectors.points] == ["p1"]
     statuses = {row["record_id"]: row["indexing_status"] for row in store["records"]}
     assert statuses == {kept: "COMPLETED", empty: "EMPTY"}
+    assert store["generation"]["fingerprint"] == "old-fp"
+    assert store["generation"]["dimension"] == 32
+    assert vectors.ensured[-1] == 32
+    assert vectors.drops >= 2
+
+
+def test_reindex_deletes_events_published_before_redis_fails():
+    settings = load_settings()
+    store = {
+        "records": [
+            {
+                "record_id": "r1",
+                "kb_id": "kb",
+                "external_record_id": "a",
+                "version": 1,
+                "content_rev": "c",
+                "indexing_status": "COMPLETED",
+                "failure_reason": None,
+            },
+            {
+                "record_id": "r2",
+                "kb_id": "kb",
+                "external_record_id": "b",
+                "version": 1,
+                "content_rev": "c",
+                "indexing_status": "COMPLETED",
+                "failure_reason": None,
+            },
+        ],
+        "chunks": [],
+        "postings": [],
+        "generation": {
+            "fingerprint": "old-fp",
+            "model": "m",
+            "dimension": 32,
+            "max_seq_length": 8192,
+            "keyword_json": {},
+            "fusion_json": {},
+        },
+    }
+
+    class _RedisFailsMidway:
+        def __init__(self):
+            self.deleted = []
+
+        def ping(self):
+            return True
+
+        def xadd(self, *_args, **_kwargs):
+            if self.deleted is not None and getattr(self, "sent", 0):
+                raise redis.RedisError("down")
+            self.sent = 1
+            return "1-0"
+
+        def xdel(self, stream, *ids):
+            self.deleted.append((stream, ids))
+            return len(ids)
+
+    redis_client = _RedisFailsMidway()
+    vectors = _Vectors([])
+    app = create_app(settings)
+    app.router.on_startup.clear()
+    app.state.db = _DB(store)
+    app.state.redis = redis_client
+    app.state.vectors = vectors
+    app.state.engine = Engine(settings, app.state.db, vectors, FakeEmbedder())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/index/reindex")
+    assert response.status_code == 503, response.text
+    assert redis_client.deleted
+    assert redis_client.deleted[0][1] == ("1-0",)
+    assert store["generation"]["fingerprint"] == "old-fp"
 
 
 def test_restore_points_upserts_a_dense_named_vector():

@@ -188,11 +188,21 @@ class Engine:
                 dict(row)
                 for row in conn.execute("select record_id, indexing_status, failure_reason from records").fetchall()
             ]
-        return {"points": points, "chunks": chunks, "postings": postings, "statuses": statuses}
+            generation = generation_row(conn)
+        return {
+            "points": points,
+            "chunks": chunks,
+            "postings": postings,
+            "statuses": statuses,
+            "generation": dict(generation) if generation else None,
+        }
 
     def restore_index(self, snap: dict) -> None:
         """Put a capture_index snapshot back after a rebuild that could not be published."""
-        self.vectors.ensure(self.embedder.dim)
+        generation = snap.get("generation")
+        dim = int(generation["dimension"]) if generation and generation.get("dimension") else self.embedder.dim
+        self.vectors.drop()
+        self.vectors.ensure(dim)
         self.vectors.restore_points(snap["points"])
         with self.db.connect() as conn:
             conn.execute("delete from bm25_postings")
@@ -224,6 +234,16 @@ class Engine:
                     where record_id = %s
                     """,
                     (row["indexing_status"], row["failure_reason"], row["record_id"]),
+                )
+            if generation:
+                write_generation(
+                    conn,
+                    fingerprint=generation["fingerprint"],
+                    model=generation["model"],
+                    dimension=int(generation["dimension"]),
+                    max_seq_length=int(generation["max_seq_length"]),
+                    keyword=_json_map(generation.get("keyword_json")),
+                    fusion=_json_map(generation.get("fusion_json")),
                 )
             conn.commit()
 
@@ -541,6 +561,15 @@ def _ms(moment: datetime) -> int:
 def branch_depth(limit: int) -> int:
     """Hits each retriever returns before RRF. Mirrors PipesHub Prefetch `limit * 2`."""
     return limit * 2
+
+
+def _json_map(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        loaded = json.loads(value)
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
 
 
 def has_indexable_text(envelope: Envelope) -> bool:
