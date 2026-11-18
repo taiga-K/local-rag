@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-STATUSES = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY")
+STATUSES = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "NOT_STARTED")
 
 
 @dataclass(frozen=True)

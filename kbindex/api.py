@@ -26,6 +26,7 @@ from kbindex.contract import (
 from kbindex.db import (
     Database,
     chunk_public_id,
+    clear_postings,
     counts_for,
     delete_chunks_for,
     kb_row,
@@ -223,7 +224,7 @@ def _rebuild_gate(app) -> None:
     _require_redis(app)
     with app.state.db.connect() as conn:
         busy = conn.execute(
-            "select 1 from records where indexing_status = 'IN_PROGRESS' limit 1"
+            "select 1 from records where indexing_status in ('IN_PROGRESS', 'QUEUED') limit 1"
         ).fetchone()
     if busy:
         raise PushRefusal(409, "SYNC_IN_PROGRESS", "A sync or ingest is running.")
@@ -271,6 +272,7 @@ def _queue_records(app, kb_id: str) -> JSONResponse:
 
 def _vector_store_job(app, operation: str) -> JSONResponse:
     _rebuild_gate(app)
+    queued = False
     try:
         if operation == "cleanup":
             try:
@@ -279,9 +281,12 @@ def _vector_store_job(app, operation: str) -> JSONResponse:
             except QdrantUnavailable:
                 raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Qdrant is unavailable.") from None
             with app.state.db.connect() as conn:
+                clear_postings(conn)
                 conn.execute(
                     """
-                    update records set indexing_status = 'NOT_STARTED', failure_reason = null, updated_at = now()
+                    update records
+                    set indexing_status = 'NOT_STARTED', has_indexed_copy = false,
+                        failure_reason = null, updated_at = now()
                     """
                 )
                 conn.commit()
@@ -290,6 +295,7 @@ def _vector_store_job(app, operation: str) -> JSONResponse:
             rows = app.state.engine.queue_reindex()
         except psycopg.Error:
             raise PushRefusal(503, "POSTGRES_UNAVAILABLE", "Postgres is unavailable.") from None
+        queued = True
         seen = set()
         unique = []
         for row in rows:
@@ -300,7 +306,8 @@ def _vector_store_job(app, operation: str) -> JSONResponse:
         _publish_rows(app, unique)
         return JSONResponse(status_code=202, content={"accepted": True, "operation": "reindex", "queued": len(unique)})
     finally:
-        _release_rebuild(app)
+        if operation == "cleanup" or not queued:
+            _release_rebuild(app)
 
 
 async def _put_embedding(app, request: Request) -> JSONResponse:

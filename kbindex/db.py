@@ -195,7 +195,7 @@ def lock_record(conn, record_id):
 
 
 def counts_for(conn, kb_id: str) -> dict[str, int]:
-    names = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY")
+    names = ("QUEUED", "IN_PROGRESS", "COMPLETED", "FAILED", "EMPTY", "NOT_STARTED")
     out = {name: 0 for name in names}
     rows = conn.execute(
         "select indexing_status, count(*) as n from records where kb_id = %s group by indexing_status",

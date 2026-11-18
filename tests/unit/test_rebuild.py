@@ -6,6 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kbindex.api import create_app
+from kbindex.config import load_settings
+from kbindex.embed import FakeEmbedder
+from kbindex.pipeline import Engine
 from kbindex.qdrant_store import QdrantUnavailable
 
 
@@ -47,10 +50,21 @@ class _Conn:
 
     def execute(self, sql, params=None):
         text = " ".join(sql.split())
-        if "indexing_status = 'IN_PROGRESS'" in text and text.startswith("select"):
-            return _Result([{"one": 1}] if self.store["busy"] else [])
+        if text.startswith("select 1 from records where indexing_status"):
+            blocked = bool(self.store.get("busy")) or (bool(self.store.get("queued_block")) and "QUEUED" in text)
+            return _Result([{"one": 1}] if blocked else [])
         if text.startswith("update records set indexing_status = 'NOT_STARTED'"):
             self.store["status"] = "NOT_STARTED"
+            if "has_indexed_copy" in text:
+                self.store["has_indexed_copy"] = False
+            return _Result([])
+        if text.startswith("delete from bm25_postings"):
+            self.store["postings"] = []
+            return _Result([])
+        if text.startswith("delete from bm25_terms") or text.startswith("delete from bm25_stats"):
+            return _Result([])
+        if text.startswith("delete from chunks"):
+            self.store["chunks"] = []
             return _Result([])
         if text.startswith("update records") and "QUEUED" in text:
             return _Result([])
@@ -114,6 +128,9 @@ class _Redis:
         self.deleted += 1
         self.held = False
         return 1
+
+    def xadd(self, *_args, **_kwargs):
+        return "1-0"
 
 
 class _Engine:
@@ -195,6 +212,89 @@ def test_cleanup_drops_the_collection_and_marks_records_not_started(monkeypatch)
     assert vectors.ensured == [32]
     assert store["status"] == "NOT_STARTED"
     assert vectors.search("q", limit=10, kb_ids=None) == []
+
+
+def test_cleanup_drops_keyword_rows_and_the_indexed_copy(monkeypatch):
+    store = {
+        "busy": False,
+        "queued": [],
+        "status": "COMPLETED",
+        "has_indexed_copy": True,
+        "chunks": ["c1"],
+        "postings": ["p1"],
+    }
+    with _app(_Vectors(count=2), store, _Redis(), monkeypatch) as client:
+        response = client.post("/api/v1/connectors/vector-store/cleanup")
+    assert response.status_code == 202, response.text
+    assert store["chunks"] == []
+    assert store["postings"] == []
+    assert store["has_indexed_copy"] is False
+    assert store["status"] == "NOT_STARTED"
+
+
+def test_cleanup_is_409_while_records_are_queued(monkeypatch):
+    store = {"busy": False, "queued_block": True, "queued": [], "status": "QUEUED"}
+    vectors = _Vectors(count=2)
+    with _app(vectors, store, _Redis(), monkeypatch) as client:
+        response = client.post("/api/v1/connectors/vector-store/cleanup")
+    assert response.status_code == 409
+    assert response.json()["error"]["reason"] == "SYNC_IN_PROGRESS"
+    assert vectors.dropped == 0
+
+
+def test_reindex_holds_the_lock_so_cleanup_cannot_start(monkeypatch):
+    redis = _Redis()
+    store = {
+        "busy": False,
+        "queued": [{
+            "record_id": "r1",
+            "kb_id": "kb",
+            "external_record_id": "doc",
+            "version": 1,
+            "content_rev": "c",
+        }],
+        "status": "COMPLETED",
+    }
+    vectors = _Vectors(count=1)
+    with _app(vectors, store, redis, monkeypatch) as client:
+        started = client.post("/api/v1/connectors/vector-store/reindex")
+        assert started.status_code == 202, started.text
+        cleanup = client.post("/api/v1/connectors/vector-store/cleanup")
+    assert redis.deleted == 0
+    assert cleanup.status_code == 409
+    assert cleanup.json()["error"]["reason"] == "REBUILD_RUNNING"
+    assert vectors.dropped == 0
+
+
+def test_worker_claims_a_not_started_record():
+    seen: list[str] = []
+
+    class Conn:
+        def execute(self, sql, _params=None):
+            seen.append(" ".join(sql.split()))
+
+            class Rows:
+                def fetchone(self):
+                    return None
+
+            return Rows()
+
+        def commit(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class DB:
+        def connect(self):
+            return Conn()
+
+    engine = Engine(load_settings(), DB(), None, FakeEmbedder())
+    assert engine.index_record("kb", "doc-1", event_version=1, event_rev="rev") == "stale"
+    assert "NOT_STARTED" in seen[0]
 
 
 def test_upsert_rejects_a_vector_of_the_wrong_dimension():

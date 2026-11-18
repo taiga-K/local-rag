@@ -7,8 +7,9 @@ and the missing transition table noted in test_viewpoints.md gap 7.
 
 import pytest
 
+from kbindex.db import counts_for
 from kbindex.decide import decide
-from kbindex.status import apply
+from kbindex.status import STATUSES, apply
 
 
 @pytest.mark.parametrize(
@@ -77,6 +78,28 @@ def test_reprocess_and_lifecycle():
 
 def test_claim_only_from_queued():
     assert apply("COMPLETED", "claim").refused == "NOT_QUEUED"
+
+
+def test_not_started_is_a_real_status_and_reprocess_queues_it():
+    assert "NOT_STARTED" in STATUSES
+    queued = apply("NOT_STARTED", "reprocess")
+    assert queued.refused is None
+    assert queued.status == "QUEUED"
+
+
+def test_counts_include_not_started_rows():
+    class _Rows:
+        def fetchall(self):
+            return [{"indexing_status": "NOT_STARTED", "n": 2}, {"indexing_status": "EMPTY", "n": 1}]
+
+    class _Conn:
+        def execute(self, _sql, _params=None):
+            return _Rows()
+
+    counts = counts_for(_Conn(), "kb")
+    assert counts["NOT_STARTED"] == 2
+    assert counts["EMPTY"] == 1
+    assert sum(counts.values()) == 3
 
 
 def test_content_update_queues_and_metadata_keeps_status():
