@@ -7,7 +7,7 @@ import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { loadSettings, listKnowledgeBases, loadStatus, reindexConnector, saveSettings, type RecordRow } from "./api";
-import { SCREENS, autoIndexCopy, countRows, foldersText, parseFolders, type ScreenId } from "./view";
+import { SCREENS, autoIndexCopy, commitSettingsChange, countRows, foldersText, parseFolders, type ScreenId, type SettingsDraft } from "./view";
 
 export function App() {
   const [screen, setScreen] = useState<ScreenId>("folders");
@@ -33,16 +33,24 @@ export function App() {
     }).catch(() => undefined);
   }, []);
 
-  async function persist(next: { folders: string; includeSubfolders: boolean; autoIndex: boolean }) {
+  async function persist(next: SettingsDraft): Promise<SettingsDraft> {
     const saved = await saveSettings({
       folders: parseFolders(next.folders),
       includeSubfolders: next.includeSubfolders,
       autoIndex: next.autoIndex,
     });
-    setFolders(foldersText(saved.folders));
-    setIncludeSubfolders(saved.includeSubfolders);
-    setAutoIndex(saved.autoIndex);
-    setMessage("保存しました");
+    return {
+      folders: foldersText(saved.folders),
+      includeSubfolders: saved.includeSubfolders,
+      autoIndex: saved.autoIndex,
+    };
+  }
+
+  function applyDraft(result: { value: SettingsDraft; message: string }) {
+    setFolders(result.value.folders);
+    setIncludeSubfolders(result.value.includeSubfolders);
+    setAutoIndex(result.value.autoIndex);
+    setMessage(result.message);
   }
 
   async function refreshStatus() {
@@ -71,19 +79,15 @@ export function App() {
           <Button
             label={includeSubfolders ? "下の階層も含める" : "そのフォルダだけ"}
             onClick={() => {
-              const next = !includeSubfolders;
-              setIncludeSubfolders(next);
-              void persist({ folders, includeSubfolders: next, autoIndex }).catch((error: unknown) =>
-                setMessage(error instanceof Error ? error.message : "保存に失敗しました"),
-              );
+              const current = { folders, includeSubfolders, autoIndex };
+              void commitSettingsChange(current, { ...current, includeSubfolders: !includeSubfolders }, persist).then(applyDraft);
             }}
           />
           <Button
             label="保存"
             onClick={() => {
-              void persist({ folders, includeSubfolders, autoIndex }).catch((error: unknown) =>
-                setMessage(error instanceof Error ? error.message : "保存に失敗しました"),
-              );
+              const current = { folders, includeSubfolders, autoIndex };
+              void commitSettingsChange(current, current, persist).then(applyDraft);
             }}
           />
         </VStack>
@@ -95,11 +99,8 @@ export function App() {
           <Button
             label={autoIndex ? "自動索引を止める" : "自動索引を始める"}
             onClick={() => {
-              const next = !autoIndex;
-              setAutoIndex(next);
-              void persist({ folders, includeSubfolders, autoIndex: next }).catch((error: unknown) =>
-                setMessage(error instanceof Error ? error.message : "保存に失敗しました"),
-              );
+              const current = { folders, includeSubfolders, autoIndex };
+              void commitSettingsChange(current, { ...current, autoIndex: !autoIndex }, persist).then(applyDraft);
             }}
           />
           <TextInput label="知識ベース" value={kbId} onChange={(value) => setKbId(value)} />

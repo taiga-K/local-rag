@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCREENS, autoIndexCopy, countRows, foldersText, parseFolders, showsAdminControls } from "./view";
+import { SCREENS, autoIndexCopy, commitSettingsChange, countRows, foldersText, parseFolders, showsAdminControls } from "./view";
 
 describe("settings view", () => {
   it("keeps unique folder paths and drops blanks", () => {
@@ -23,5 +23,26 @@ describe("settings view", () => {
   it("does not offer admin screens", () => {
     expect(showsAdminControls()).toBe(false);
     expect(SCREENS.map((screen) => screen.id)).toEqual(["folders", "index", "status"]);
+  });
+
+  it("keeps the previous flags when a toggle save fails, so a retry writes the same change", async () => {
+    const current = { folders: "/data/a", includeSubfolders: true, autoIndex: true };
+    const failed = await commitSettingsChange(current, { ...current, includeSubfolders: false }, async () => {
+      throw new Error("保存に失敗しました");
+    });
+    expect(failed.value).toEqual(current);
+    expect(failed.message).toBe("保存に失敗しました");
+
+    const attempts: boolean[] = [];
+    const again = await commitSettingsChange(failed.value, { ...failed.value, autoIndex: false }, async (next) => {
+      attempts.push(next.autoIndex);
+      throw new Error("down");
+    });
+    expect(attempts).toEqual([false]);
+    expect(again.value.autoIndex).toBe(true);
+
+    const saved = await commitSettingsChange(again.value, { ...again.value, includeSubfolders: false }, async (next) => next);
+    expect(saved.value.includeSubfolders).toBe(false);
+    expect(saved.message).toBe("保存しました");
   });
 });

@@ -43,3 +43,23 @@ export function countRows(counts: Record<string, number>): { status: string; cou
 export function showsAdminControls(): false {
   return false;
 }
+
+export type SettingsDraft = {
+  folders: string;
+  includeSubfolders: boolean;
+  autoIndex: boolean;
+};
+
+export async function commitSettingsChange(
+  current: SettingsDraft,
+  next: SettingsDraft,
+  save: (value: SettingsDraft) => Promise<SettingsDraft>,
+): Promise<{ value: SettingsDraft; message: string }> {
+  try {
+    const saved = await save(next);
+    return { value: saved, message: "保存しました" };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "保存に失敗しました";
+    return { value: current, message };
+  }
+}
