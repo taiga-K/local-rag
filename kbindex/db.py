@@ -547,7 +547,10 @@ def _wipe_postings(conn) -> list[dict]:
     return list(
         conn.execute(
             """
-            with mark as (
+            with mark as materialized (
+              -- Computed on the statement snapshot, not inlined after the delete.
+              -- Otherwise max(seq) can include this statement's own deltas and the
+              -- following delete drops a concurrent ingest that committed during it.
               select
                 coalesce((select max(seq) from bm25_term_delta), 0) as term_seq,
                 coalesce((select max(seq) from bm25_count_delta), 0) as count_seq
