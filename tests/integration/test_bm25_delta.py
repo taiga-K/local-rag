@@ -18,6 +18,8 @@ from kbindex.config import load_settings
 from kbindex.db import (
     Database,
     bm25_rows,
+    _drop_wiped_deltas,
+    _wipe_postings,
     clear_postings,
     delete_chunks_for,
     delete_postings,
@@ -292,6 +294,36 @@ def test_record_paths_undo_update_clear_and_restore():
     with db.connect() as conn:
         n_docs, df = _assert_match(conn)
         assert n_docs == 1 and df == {"alpha": 1}
+
+
+def test_clear_postings_keeps_a_delta_committed_after_the_delete():
+    """Another KB can commit during a wipe. Its deltas must survive."""
+    dsn = _fresh("bm25_delta_wipe_race")
+    db = Database(dsn)
+    db.migrate()
+    with db.connect() as conn:
+        _add(conn, "kb-a", ["alpha"])
+        conn.commit()
+    assert fold_all(dsn)[1] is None
+    wiper = db.connect()
+    try:
+        touched = _wipe_postings(wiper)
+        assert touched and touched[0]["tokenizer"] == TOKENIZER
+        with db.connect() as other:
+            _add(other, "kb-b", ["beta"])
+            other.commit()
+        _drop_wiped_deltas(wiper, touched)
+        wiper.commit()
+    finally:
+        wiper.close()
+    with db.connect() as conn:
+        n_docs, df = _assert_match(conn)
+        assert n_docs == 1 and df == {"beta": 1}
+        stats = conn.execute(
+            "select doc_count from bm25_stats where generation = 1 and tokenizer = %s",
+            (TOKENIZER,),
+        ).fetchone()
+        assert stats is not None and int(stats["doc_count"]) == 0
 
 
 def test_concurrent_inserts_match_recount():

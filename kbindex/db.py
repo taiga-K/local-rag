@@ -521,17 +521,105 @@ def queue_records_with_text(conn) -> list[dict[str, Any]]:
 
 
 def clear_postings(conn) -> None:
-    """Drop postings and folded term rows. A stats row stays, with doc_count 0.
+    """Wipe postings. Each touched stats row stays, with doc_count 0.
 
-    Count deltas written by the delete are removed so search does not add them on top of 0.
-    Pending rows stay until recount; fold does not clear them either.
+    Document frequency is global per tokenizer, so every KB shares one delta table.
+    The rows removed are only the stale deltas of the tokenizers whose postings this
+    wipe deleted: deltas already visible to that delete, plus the negative deltas this
+    transaction just wrote. A delta another transaction commits after the delete
+    (another KB ingesting the same tokenizer) is left alone.
+    Pending rows stay until recount.
     """
-    delete_postings(conn, "true")
-    conn.execute("update bm25_stats set doc_count = 0")
-    conn.execute("delete from bm25_terms")
-    conn.execute("delete from bm25_term_delta")
-    conn.execute("delete from bm25_count_delta")
-    conn.execute("delete from chunks")
+    touched = _wipe_postings(conn)
+    _drop_wiped_deltas(conn, touched)
+    conn.execute(
+        """
+        delete from chunks c
+        where not exists (
+          select 1 from bm25_postings p where p.chunk_id = c.chunk_id
+        )
+        """
+    )
+
+
+def _wipe_postings(conn) -> list[dict]:
+    """Delete every posting and return one row per tokenizer, with the pre-delete delta watermarks."""
+    return list(
+        conn.execute(
+            """
+            with mark as (
+              select
+                coalesce((select max(seq) from bm25_term_delta), 0) as term_seq,
+                coalesce((select max(seq) from bm25_count_delta), 0) as count_seq
+            ),
+            gone as (
+              delete from bm25_postings
+              returning generation, tokenizer, chunk_id
+            ),
+            cnt as (
+              insert into bm25_count_delta (generation, tokenizer, d)
+              select generation, tokenizer, -count(distinct chunk_id)::int
+              from gone
+              group by generation, tokenizer
+              having count(*) > 0
+              returning 1
+            )
+            select distinct g.generation, g.tokenizer, m.term_seq, m.count_seq
+            from gone g
+            cross join mark m
+            """
+        ).fetchall()
+    )
+
+
+def _drop_wiped_deltas(conn, touched: list[dict]) -> None:
+    if not touched:
+        return
+    generations = [int(row["generation"]) for row in touched]
+    tokenizers = [row["tokenizer"] for row in touched]
+    term_seq = int(touched[0]["term_seq"])
+    count_seq = int(touched[0]["count_seq"])
+    scope = (generations, tokenizers)
+    conn.execute(
+        """
+        update bm25_stats s
+        set doc_count = 0
+        where (s.generation, s.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        """,
+        scope,
+    )
+    conn.execute(
+        """
+        delete from bm25_terms f
+        where (f.generation, f.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        """,
+        scope,
+    )
+    own = "d.xmin = pg_current_xact_id()::xid"
+    conn.execute(
+        f"""
+        delete from bm25_term_delta d
+        where (d.generation, d.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        and (d.seq <= %s or {own})
+        """,
+        (*scope, term_seq),
+    )
+    conn.execute(
+        f"""
+        delete from bm25_count_delta d
+        where (d.generation, d.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        and (d.seq <= %s or {own})
+        """,
+        (*scope, count_seq),
+    )
 
 
 def replace_graph(conn, record_id, blocks: list[tuple[int, int | None, str, str]]) -> None:
