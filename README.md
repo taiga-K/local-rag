@@ -79,7 +79,9 @@ curl -s -X POST http://127.0.0.1:43123/api/v1/retrieve \
 
 融合は RRF だけである。式は Qdrant の `1/(position+2)`（position は 0 始まり）で、設定では変えない。キーワードは fastembed の `Qdrant/bm25` だけである。
 
-BM25 の文書頻度と文書数は取り込みのたびに差分で更新する。検索はその差分を畳み込み済みの値に足す。差分を畳み込むのは `kbindex-maintain fold`、postings から数え直すのは `kbindex-maintain recount` である。このプロセスは常駐させない。移行でトリガーを初めて作った起動は、既存の索引を `bm25_df_pending` に載せ、続けて `recount` を一度実行する。pending のあいだ検索は postings を数える。
+BM25 の文書頻度と文書数は取り込みのたびに差分で更新する。検索はその差分を畳み込み済みの値に足す。差分を畳み込むのは `kbindex-maintain fold`、postings から数え直すのは `kbindex-maintain recount` である。このプロセスは常駐させない。
+
+この版へ上げたあとは、一度 `kbindex-maintain recount` を実行する。起動時の移行は表とトリガーを作り、既存の `(generation, tokenizer)` を `bm25_df_pending` に載せるだけで、recount はしない。pending のあいだ、文書頻度だけ postings を数える。文書数は `bm25_stats.doc_count` と `bm25_count_delta` の和である。recount が終わると pending は消える。
 
 索引の状態は `GET /api/v1/knowledgeBase/record/{recordId}` と `GET /api/v1/records/{recordId}` が返す。件数は `GET /api/v1/connectors/{kbId}/stats` の `data.stats.indexingStatus` である。再処理は `POST /api/v1/records/{recordId}/reindex` である。
 

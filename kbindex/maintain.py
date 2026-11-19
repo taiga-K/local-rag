@@ -2,6 +2,7 @@
 
 Search adds unfolded deltas itself, so neither command has to be running for counts to be right.
 ``fold`` only compacts the delta tables. ``recount`` recomputes both from postings.
+Startup migration does not recount: after an upgrade, run ``kbindex-maintain recount`` once.
 
 Doc-count deltas live in ``bm25_count_delta`` rather than under a sentinel term. PipesHub stores
 them in ``lexical_df_delta`` with ``term = -1`` because that table's term is an integer. Terms
@@ -203,18 +204,6 @@ def recount(dsn: str) -> list[dict] | None:
                 return rows
         except psycopg.errors.SerializationFailure:
             return None
-
-
-def settle_bm25_pending(dsn: str) -> None:
-    """Recount once when a migration left collections pending. Search is already correct until then."""
-    for _ in range(8):
-        with _connect(dsn) as conn:
-            pending = conn.execute("select 1 from bm25_df_pending limit 1").fetchone()
-        if pending is None:
-            return
-        if recount(dsn) is not None:
-            return
-        time.sleep(0.05)
 
 
 def _interval(args: list[str]) -> float:

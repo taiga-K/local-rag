@@ -103,6 +103,8 @@ create table if not exists bm25_postings (
   doc_len int not null,
   primary key (generation, tokenizer, term, chunk_id)
 );
+create index if not exists bm25_postings_chunk
+  on bm25_postings (generation, tokenizer, chunk_id);
 create table if not exists bm25_term_delta (
   seq bigint generated always as identity primary key,
   generation int not null,
@@ -204,9 +206,9 @@ referencing old table as oldtab new table as newtab
 for each statement execute function bm25_postings_df_capture()
 """
 
-# One statement, so folded values and deltas share the caller's snapshot. Pending collections
-# (postings written before the triggers) are counted from postings, including doc_count: that
-# counter was only rebuilt before, so it can be stale until recount.
+# One statement, so folded values and deltas share the caller's snapshot.
+# While bm25_df_pending is set, only per-term df is counted from postings.
+# Document count is always bm25_stats plus bm25_count_delta (PipesHub search_sparse).
 _BM25_READ = """
 create or replace function bm25_read(p_tokenizer text, p_terms text[], p_kb text[])
 returns table (doc_count int, term text, df int, chunk_id text, tf double precision, doc_len int)
@@ -220,18 +222,12 @@ with pending as (
   ) as pending
 ),
 n as (
-  select case when (select pending from pending) then (
-    select count(*)::int from (
-      select chunk_id from bm25_postings p
-      where p.generation = 1 and p.tokenizer = p_tokenizer
-      group by chunk_id
-    ) c
-  ) else (
+  select (
     coalesce((select s.doc_count from bm25_stats s
               where s.generation = 1 and s.tokenizer = p_tokenizer), 0)
     + coalesce((select sum(d.d) from bm25_count_delta d
                 where d.generation = 1 and d.tokenizer = p_tokenizer), 0)
-  )::int end as doc_count
+  )::int as doc_count
 ),
 df as (
   select q.term,
@@ -347,6 +343,8 @@ class Database:
             for statement in BM25_INCREMENTAL:
                 conn.execute(statement)
             if first_triggers:
+                # Pre-trigger collections stay pending until an operator runs
+                # kbindex-maintain recount. Search counts their df from postings until then.
                 conn.execute(
                     """
                     insert into bm25_df_pending (generation, tokenizer)
@@ -357,9 +355,6 @@ class Database:
                     """
                 )
             conn.commit()
-        from kbindex.maintain import settle_bm25_pending
-
-        settle_bm25_pending(self.dsn)
 
     def ping(self) -> bool:
         try:
@@ -526,13 +521,16 @@ def queue_records_with_text(conn) -> list[dict[str, Any]]:
 
 
 def clear_postings(conn) -> None:
-    """Drop the lexical index. A full wipe, not a fold to zero."""
+    """Drop postings and folded term rows. A stats row stays, with doc_count 0.
+
+    Count deltas written by the delete are removed so search does not add them on top of 0.
+    Pending rows stay until recount; fold does not clear them either.
+    """
     delete_postings(conn, "true")
+    conn.execute("update bm25_stats set doc_count = 0")
     conn.execute("delete from bm25_terms")
-    conn.execute("delete from bm25_stats")
     conn.execute("delete from bm25_term_delta")
     conn.execute("delete from bm25_count_delta")
-    conn.execute("delete from bm25_df_pending")
     conn.execute("delete from chunks")
 
 
