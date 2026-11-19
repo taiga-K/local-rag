@@ -66,7 +66,7 @@ class _Conn:
             if "has_indexed_copy" in text:
                 self.store["has_indexed_copy"] = False
             return _Result([])
-        if text.startswith("delete from bm25_postings"):
+        if "delete from bm25_postings" in text:
             self.store["postings"] = []
             return _Result([])
         if text.startswith("delete from bm25_terms") or text.startswith("delete from bm25_stats"):

@@ -85,8 +85,6 @@ create table if not exists bm25_stats (
   generation int not null,
   tokenizer text not null,
   doc_count int not null,
-  avgdl double precision not null default 0,
-  total_tokens int not null,
   primary key (generation, tokenizer)
 );
 create table if not exists bm25_terms (
@@ -105,6 +103,30 @@ create table if not exists bm25_postings (
   doc_len int not null,
   primary key (generation, tokenizer, term, chunk_id)
 );
+create index if not exists bm25_postings_chunk
+  on bm25_postings (generation, tokenizer, chunk_id);
+create table if not exists bm25_term_delta (
+  seq bigint generated always as identity primary key,
+  generation int not null,
+  tokenizer text not null,
+  term text not null,
+  d int not null
+);
+create index if not exists bm25_term_delta_term
+  on bm25_term_delta (generation, tokenizer, term) include (d);
+create table if not exists bm25_count_delta (
+  seq bigint generated always as identity primary key,
+  generation int not null,
+  tokenizer text not null,
+  d int not null
+);
+create index if not exists bm25_count_delta_tok
+  on bm25_count_delta (generation, tokenizer) include (d);
+create table if not exists bm25_df_pending (
+  generation int not null,
+  tokenizer text not null,
+  primary key (generation, tokenizer)
+);
 """
 
 ALTERS = (
@@ -115,7 +137,8 @@ ALTERS = (
     "alter table index_generation add column if not exists max_seq_length int",
     "alter table index_generation add column if not exists keyword_json jsonb",
     "alter table index_generation add column if not exists fusion_json jsonb",
-    "alter table bm25_stats add column if not exists avgdl double precision not null default 0",
+    "alter table bm25_stats drop column if exists avgdl",
+    "alter table bm25_stats drop column if exists total_tokens",
     "alter table records add column if not exists embed_done int",
     "alter table records add column if not exists embed_total int",
     """
@@ -132,6 +155,154 @@ ALTERS = (
     "alter table records add column if not exists has_indexed_copy boolean not null default false",
     "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
+
+# Statement triggers record DF. There is no restore role that reloads exported frequencies, so every
+# posting write is counted. enable_nestloop is off for the same reason as PipesHub: a transition table
+# has no statistics.
+_BM25_CAPTURE = """
+create or replace function bm25_postings_df_capture() returns trigger
+language plpgsql
+set enable_nestloop = off
+set jit = off
+as $fn$
+begin
+  if tg_op = 'INSERT' then
+    insert into bm25_term_delta (generation, tokenizer, term, d)
+      select n.generation, n.tokenizer, n.term, count(*)::int from newtab n group by 1, 2, 3;
+  elsif tg_op = 'DELETE' then
+    insert into bm25_term_delta (generation, tokenizer, term, d)
+      select o.generation, o.tokenizer, o.term, -count(*)::int from oldtab o group by 1, 2, 3;
+  else
+    insert into bm25_term_delta (generation, tokenizer, term, d)
+      select x.generation, x.tokenizer, x.term, sum(x.d)::int from (
+        select n.generation, n.tokenizer, n.term, 1 as d from newtab n
+        union all
+        select o.generation, o.tokenizer, o.term, -1 from oldtab o) x
+      group by 1, 2, 3 having sum(x.d) <> 0;
+  end if;
+  return null;
+end
+$fn$
+"""
+
+_BM25_TRIGGER_INSERT = """
+create or replace trigger bm25_postings_df_insert
+after insert on bm25_postings
+referencing new table as newtab
+for each statement execute function bm25_postings_df_capture()
+"""
+
+_BM25_TRIGGER_DELETE = """
+create or replace trigger bm25_postings_df_delete
+after delete on bm25_postings
+referencing old table as oldtab
+for each statement execute function bm25_postings_df_capture()
+"""
+
+_BM25_TRIGGER_UPDATE = """
+create or replace trigger bm25_postings_df_update
+after update on bm25_postings
+referencing old table as oldtab new table as newtab
+for each statement execute function bm25_postings_df_capture()
+"""
+
+# One statement, so folded values and deltas share the caller's snapshot.
+# While bm25_df_pending is set, only per-term df is counted from postings.
+# Document count is always bm25_stats plus bm25_count_delta (PipesHub search_sparse).
+_BM25_READ = """
+create or replace function bm25_read(p_tokenizer text, p_terms text[], p_kb text[])
+returns table (doc_count int, term text, df int, chunk_id text, tf double precision, doc_len int)
+language sql
+stable
+as $fn$
+with pending as (
+  select exists (
+    select 1 from bm25_df_pending x
+    where x.generation = 1 and x.tokenizer = p_tokenizer
+  ) as pending
+),
+n as (
+  select (
+    coalesce((select s.doc_count from bm25_stats s
+              where s.generation = 1 and s.tokenizer = p_tokenizer), 0)
+    + coalesce((select sum(d.d) from bm25_count_delta d
+                where d.generation = 1 and d.tokenizer = p_tokenizer), 0)
+  )::int as doc_count
+),
+df as (
+  select q.term,
+    case when (select pending from pending) then (
+      select count(*)::int from bm25_postings p
+      where p.generation = 1 and p.tokenizer = p_tokenizer and p.term = q.term
+    ) else (
+      coalesce((select f.df from bm25_terms f
+                where f.generation = 1 and f.tokenizer = p_tokenizer and f.term = q.term), 0)
+      + coalesce((select sum(t.d) from bm25_term_delta t
+                  where t.generation = 1 and t.tokenizer = p_tokenizer and t.term = q.term), 0)
+    )::int end as df
+  from (select distinct t.term from unnest(coalesce(p_terms, '{}'::text[])) as t(term)) q
+),
+posts as (
+  select p.term, p.chunk_id, p.tf, p.doc_len
+  from bm25_postings p
+  where p.generation = 1 and p.tokenizer = p_tokenizer
+    and p.term = any(coalesce(p_terms, '{}'::text[]))
+    and (
+      p_kb is null
+      or exists (
+        select 1 from chunks c
+        join records r on r.record_id = c.record_id
+        where c.chunk_id = p.chunk_id and r.kb_id = any(p_kb)
+      )
+    )
+)
+select n.doc_count, df.term, df.df, posts.chunk_id, posts.tf, posts.doc_len
+from n
+left join df on true
+left join posts on posts.term = df.term
+$fn$
+"""
+
+BM25_INCREMENTAL = (
+    _BM25_CAPTURE,
+    _BM25_TRIGGER_INSERT,
+    _BM25_TRIGGER_DELETE,
+    _BM25_TRIGGER_UPDATE,
+    _BM25_READ,
+)
+
+_WRITE_POSTINGS = """
+with incoming as (
+  select * from unnest(%s::int[], %s::text[], %s::text[], %s::text[], %s::float8[], %s::int[])
+    as t(generation, tokenizer, term, chunk_id, tf, doc_len)
+),
+fresh as materialized (
+  select distinct t.generation, t.tokenizer, t.chunk_id
+  from incoming t
+  where not exists (
+    select 1 from bm25_postings p
+    where p.generation = t.generation and p.tokenizer = t.tokenizer and p.chunk_id = t.chunk_id
+  )
+),
+ins as (
+  insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
+  select generation, tokenizer, term, chunk_id, tf, doc_len
+  from incoming
+  order by generation, tokenizer, term, chunk_id
+  on conflict (generation, tokenizer, term, chunk_id)
+  do update set tf = excluded.tf, doc_len = excluded.doc_len
+  returning 1
+),
+cnt as (
+  insert into bm25_count_delta (generation, tokenizer, d)
+  select f.generation, f.tokenizer, count(*)::int
+  from fresh f
+  group by f.generation, f.tokenizer
+  having count(*) > 0
+  returning 1
+)
+select count(*) from ins
+"""
 
 
 def record_id_for(kb_id: str, external_record_id: str) -> uuid.UUID:
@@ -166,6 +337,23 @@ class Database:
             conn.execute(SCHEMA)
             for statement in ALTERS:
                 conn.execute(statement)
+            first_triggers = conn.execute(
+                "select 1 from pg_trigger where tgname = 'bm25_postings_df_insert'"
+            ).fetchone() is None
+            for statement in BM25_INCREMENTAL:
+                conn.execute(statement)
+            if first_triggers:
+                # Pre-trigger collections stay pending until an operator runs
+                # kbindex-maintain recount. Search counts their df from postings until then.
+                conn.execute(
+                    """
+                    insert into bm25_df_pending (generation, tokenizer)
+                    select generation, tokenizer from bm25_stats
+                    union
+                    select distinct generation, tokenizer from bm25_postings
+                    on conflict do nothing
+                    """
+                )
             conn.commit()
 
     def ping(self) -> bool:
@@ -333,10 +521,108 @@ def queue_records_with_text(conn) -> list[dict[str, Any]]:
 
 
 def clear_postings(conn) -> None:
-    conn.execute("delete from bm25_postings")
-    conn.execute("delete from bm25_terms")
-    conn.execute("delete from bm25_stats")
-    conn.execute("delete from chunks")
+    """Wipe postings. Each touched stats row stays, with doc_count 0.
+
+    Document frequency is global per tokenizer, so every KB shares one delta table.
+    The rows removed are only the stale deltas of the tokenizers whose postings this
+    wipe deleted: deltas already visible to that delete, plus the negative deltas this
+    transaction just wrote. A delta another transaction commits after the delete
+    (another KB ingesting the same tokenizer) is left alone.
+    Pending rows stay until recount.
+    """
+    touched = _wipe_postings(conn)
+    _drop_wiped_deltas(conn, touched)
+    conn.execute(
+        """
+        delete from chunks c
+        where not exists (
+          select 1 from bm25_postings p where p.chunk_id = c.chunk_id
+        )
+        """
+    )
+
+
+def _wipe_postings(conn) -> list[dict]:
+    """Delete every posting and return one row per tokenizer, with the pre-delete delta watermarks."""
+    return list(
+        conn.execute(
+            """
+            with mark as materialized (
+              -- Fence the read on the statement snapshot. Inlining it after the
+              -- delete lets max(seq) include this statement's own deltas, and the
+              -- later delete then drops a concurrent ingest that committed during it.
+              select
+                coalesce((select max(seq) from bm25_term_delta), 0) as term_seq,
+                coalesce((select max(seq) from bm25_count_delta), 0) as count_seq
+            ),
+            gone as (
+              delete from bm25_postings
+              returning generation, tokenizer, chunk_id
+            ),
+            cnt as (
+              insert into bm25_count_delta (generation, tokenizer, d)
+              select generation, tokenizer, -count(distinct chunk_id)::int
+              from gone
+              group by generation, tokenizer
+              having count(*) > 0
+              returning 1
+            )
+            select distinct g.generation, g.tokenizer, m.term_seq, m.count_seq
+            from gone g
+            cross join mark m
+            """
+        ).fetchall()
+    )
+
+
+def _drop_wiped_deltas(conn, touched: list[dict]) -> None:
+    if not touched:
+        return
+    generations = [int(row["generation"]) for row in touched]
+    tokenizers = [row["tokenizer"] for row in touched]
+    term_seq = int(touched[0]["term_seq"])
+    count_seq = int(touched[0]["count_seq"])
+    scope = (generations, tokenizers)
+    conn.execute(
+        """
+        update bm25_stats s
+        set doc_count = 0
+        where (s.generation, s.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        """,
+        scope,
+    )
+    conn.execute(
+        """
+        delete from bm25_terms f
+        where (f.generation, f.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        """,
+        scope,
+    )
+    own = "d.xmin = pg_current_xact_id()::xid"
+    conn.execute(
+        f"""
+        delete from bm25_term_delta d
+        where (d.generation, d.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        and (d.seq <= %s or {own})
+        """,
+        (*scope, term_seq),
+    )
+    conn.execute(
+        f"""
+        delete from bm25_count_delta d
+        where (d.generation, d.tokenizer) in (
+          select * from unnest(%s::int[], %s::text[]) as u(generation, tokenizer)
+        )
+        and (d.seq <= %s or {own})
+        """,
+        (*scope, count_seq),
+    )
 
 
 def replace_graph(conn, record_id, blocks: list[tuple[int, int | None, str, str]]) -> None:
@@ -412,7 +698,7 @@ def read_record_index(conn, record_id) -> dict:
 
 
 def write_record_index(conn, record_id, snap: dict) -> None:
-    """Put a read_record_index snapshot back and rebuild BM25."""
+    """Put a read_record_index snapshot back. Posting triggers and the count delta keep BM25."""
     conn.execute("delete from blocks where record_id = %s", (record_id,))
     conn.execute("delete from block_groups where record_id = %s", (record_id,))
     for row in snap["blocks"]:
@@ -446,22 +732,46 @@ def write_record_index(conn, record_id, snap: dict) -> None:
                 row["piece"], row["text"], row["token_count"],
             ),
         )
-    for row in snap["postings"]:
-        conn.execute(
-            """
-            insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
-            values (%s, %s, %s, %s, %s, %s)
-            on conflict (generation, tokenizer, term, chunk_id)
-            do update set tf = excluded.tf, doc_len = excluded.doc_len
-            """,
-            (row["generation"], row["tokenizer"], row["term"], row["chunk_id"], row["tf"], row["doc_len"]),
+    write_postings(
+        conn,
+        [
+            (row["generation"], row["tokenizer"], row["term"], row["chunk_id"], row["tf"], row["doc_len"])
+            for row in snap["postings"]
+        ],
+    )
+
+
+def delete_postings(conn, where_sql: str, params: tuple = ()) -> None:
+    """Delete postings and append the doc-count delta for chunks that lost every posting.
+
+    where_sql is a trusted SQL fragment, not user input. Callers delete every posting of each
+    chunk they touch (one record, a record prefix, or the whole table).
+    """
+    conn.execute(
+        f"""
+        with gone as (
+          delete from bm25_postings
+          where {where_sql}
+          returning generation, tokenizer, chunk_id
+        ),
+        cnt as (
+          insert into bm25_count_delta (generation, tokenizer, d)
+          select generation, tokenizer, -count(distinct chunk_id)::int
+          from gone
+          group by generation, tokenizer
+          having count(*) > 0
+          returning 1
         )
-    rebuild_bm25(conn)
+        select count(*) from gone
+        """,
+        params,
+    )
 
 
 def delete_chunks_for(conn, record_id) -> None:
-    conn.execute(
-        "delete from bm25_postings where chunk_id in (select chunk_id from chunks where record_id = %s)",
+    delete_postings(
+        conn,
+        "chunk_id in (select chunk_id from chunks where record_id = %s)",
         (record_id,),
     )
     conn.execute("delete from chunks where record_id = %s", (record_id,))
@@ -486,6 +796,33 @@ def insert_postings(conn, tokenizer: str, docs: dict[str, list[str]]) -> None:
     insert_weighted_postings(conn, tokenizer, weighted, length_from_weight=True)
 
 
+def write_postings(conn, rows: list[tuple]) -> None:
+    """Insert or replace postings in one statement, and append a doc-count delta for new chunks.
+
+    A repeated (generation, tokenizer, term, chunk_id) keeps the last weight. doc_len is the
+    caller's value (the length before that de-duplication).
+    """
+    chosen: dict[tuple, tuple[float, int]] = {}
+    for generation, tokenizer, term, chunk_id, tf, doc_len in rows:
+        chosen[(int(generation), str(tokenizer), str(term), str(chunk_id))] = (float(tf), int(doc_len))
+    if not chosen:
+        return
+    generations: list[int] = []
+    tokenizers: list[str] = []
+    terms: list[str] = []
+    chunk_ids: list[str] = []
+    tfs: list[float] = []
+    doc_lens: list[int] = []
+    for (generation, tokenizer, term, chunk_id), (tf, doc_len) in chosen.items():
+        generations.append(generation)
+        tokenizers.append(tokenizer)
+        terms.append(term)
+        chunk_ids.append(chunk_id)
+        tfs.append(tf)
+        doc_lens.append(doc_len)
+    conn.execute(_WRITE_POSTINGS, (generations, tokenizers, terms, chunk_ids, tfs, doc_lens))
+
+
 def insert_weighted_postings(
     conn,
     tokenizer: str,
@@ -493,81 +830,35 @@ def insert_weighted_postings(
     *,
     length_from_weight: bool,
 ) -> None:
+    rows: list[tuple] = []
     for chunk_id, pairs in docs.items():
         doc_len = int(sum(weight for _term, weight in pairs)) if length_from_weight else len(pairs)
+        weights: dict[str, float] = {}
         for term, weight in pairs:
-            conn.execute(
-                """
-                insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
-                values (1, %s, %s, %s, %s, %s)
-                on conflict (generation, tokenizer, term, chunk_id)
-                do update set tf = excluded.tf, doc_len = excluded.doc_len
-                """,
-                (tokenizer, term, chunk_id, weight, doc_len),
-            )
-
-
-def rebuild_bm25(conn) -> None:
-    conn.execute("delete from bm25_terms where generation = 1")
-    conn.execute(
-        """
-        insert into bm25_terms (generation, tokenizer, term, df)
-        select generation, tokenizer, term, count(*)
-        from bm25_postings
-        where generation = 1
-        group by generation, tokenizer, term
-        """
-    )
-    conn.execute("delete from bm25_stats where generation = 1")
-    conn.execute(
-        """
-        insert into bm25_stats (generation, tokenizer, doc_count, avgdl, total_tokens)
-        select 1, tokenizer, count(*),
-               case when count(*) = 0 then 0 else sum(dl)::float8 / count(*) end,
-               coalesce(sum(dl), 0)
-        from (
-          select tokenizer, chunk_id, max(doc_len) as dl
-          from bm25_postings
-          where generation = 1
-          group by tokenizer, chunk_id
-        ) lengths
-        group by tokenizer
-        """
-    )
+            weights[term] = float(weight)
+        for term, weight in weights.items():
+            rows.append((1, tokenizer, term, chunk_id, weight, doc_len))
+    write_postings(conn, rows)
 
 
 def bm25_rows(conn, tokenizer: str, terms: list[str], kb_ids: list[str] | None = None):
-    stats = conn.execute(
-        "select doc_count, total_tokens, avgdl from bm25_stats where generation = 1 and tokenizer = %s",
-        (tokenizer,),
-    ).fetchone()
-    if not terms:
-        return stats, [], []
-    df_rows = conn.execute(
-        "select term, df from bm25_terms where generation = 1 and tokenizer = %s and term = any(%s)",
-        (tokenizer, terms),
+    rows = conn.execute(
+        "select doc_count, term, df, chunk_id, tf, doc_len from bm25_read(%s, %s, %s)",
+        (tokenizer, terms, kb_ids if kb_ids else None),
     ).fetchall()
-    if kb_ids:
-        posts = conn.execute(
-            """
-            select p.term, p.chunk_id, p.tf, p.doc_len
-            from bm25_postings p
-            join chunks c on c.chunk_id = p.chunk_id
-            join records r on r.record_id = c.record_id
-            where p.generation = 1 and p.tokenizer = %s and p.term = any(%s)
-              and r.kb_id = any(%s)
-            """,
-            (tokenizer, terms, kb_ids),
-        ).fetchall()
-    else:
-        posts = conn.execute(
-            """
-            select term, chunk_id, tf, doc_len
-            from bm25_postings
-            where generation = 1 and tokenizer = %s and term = any(%s)
-            """,
-            (tokenizer, terms),
-        ).fetchall()
+    if not rows:
+        return {"doc_count": 0}, [], []
+    stats = {"doc_count": int(rows[0]["doc_count"])}
+    seen: set[str] = set()
+    df_rows = []
+    posts = []
+    for row in rows:
+        term = row["term"]
+        if term is not None and term not in seen:
+            seen.add(term)
+            df_rows.append({"term": term, "df": int(row["df"])})
+        if row["chunk_id"] is not None:
+            posts.append(row)
     return stats, df_rows, posts
 
 

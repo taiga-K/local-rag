@@ -27,6 +27,7 @@ dev = [
 kbindex-api = "kbindex.api:main"
 kbindex-worker = "kbindex.worker:main"
 kbindex-ingest = "kbindex.cli:main"
+kbindex-maintain = "kbindex.maintain:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

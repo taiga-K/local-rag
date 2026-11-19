@@ -8,7 +8,7 @@ import psycopg
 import redis
 
 from kbindex.config import load_settings
-from kbindex.db import Database, rebuild_bm25, record_id_for, record_row, recover_in_progress
+from kbindex.db import Database, delete_postings, record_id_for, record_row, recover_in_progress
 from kbindex.embed import load_embedder
 from kbindex.pipeline import Engine
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
@@ -129,6 +129,5 @@ def _delete_points(engine: Engine, db: Database, record_id: str) -> None:
     except QdrantUnavailable:
         return
     with db.connect() as conn:
-        conn.execute("delete from bm25_postings where chunk_id like %s", (record_id + ":%",))
-        rebuild_bm25(conn)
+        delete_postings(conn, "chunk_id like %s", (record_id + ":%",))
         conn.commit()

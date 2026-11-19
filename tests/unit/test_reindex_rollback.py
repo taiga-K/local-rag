@@ -50,7 +50,7 @@ class _Conn:
                     row["indexing_status"] = status
                     row["failure_reason"] = reason
             return _Result([])
-        if text.startswith("delete from bm25_postings"):
+        if "delete from bm25_postings" in text:
             store["postings"] = []
             return _Result([])
         if text.startswith("delete from chunks"):
