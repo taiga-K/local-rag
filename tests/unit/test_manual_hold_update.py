@@ -73,7 +73,7 @@ class _Conn:
                 row[name] = value
             row["failure_reason"] = None
             return _Result([])
-        if text.startswith("delete from bm25_postings"):
+        if "delete from bm25_postings" in text:
             ids = {row["chunk_id"] for row in store["chunks"] if row["record_id"] == params[0]}
             store["postings"] = [row for row in store["postings"] if row["chunk_id"] not in ids]
             return _Result([])

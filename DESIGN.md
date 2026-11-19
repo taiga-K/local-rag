@@ -351,13 +351,13 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
 
 行は常に1件である。
 
-`bm25_stats(generation, tokenizer, doc_count, avgdl, total_tokens)`
+`bm25_stats(generation, tokenizer, doc_count)`
 
 `bm25_terms(generation, tokenizer, term, df, primary key (generation, tokenizer, term))`
 
 `bm25_postings(generation, tokenizer, term, chunk_id, tf)`
 
-トークナイザ名は `sudachi` と `char_bigram` である。索引は別々である。
+トークナイザ名は `sudachi` と `char_bigram` である。索引は別々である。文書頻度は `bm25_term_delta`、文書数は `bm25_count_delta` に差分で足す。検索は畳み込み済みの値に未処理の差分を足す。`kbindex-maintain fold` が差分を畳み込み、`kbindex-maintain recount` が postings から数え直す。どちらのコマンドも常駐させない。
 
 ### ファイル
 

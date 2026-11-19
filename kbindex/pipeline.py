@@ -20,14 +20,15 @@ from kbindex.db import (
     bm25_rows,
     chunk_public_id,
     delete_chunks_for,
+    delete_postings,
     generation_row,
     hydrate_chunks,
     insert_chunks,
     insert_weighted_postings,
     queue_records_with_text,
-    rebuild_bm25,
     record_id_for,
     write_generation,
+    write_postings,
     replace_graph,
     replace_groups,
 )
@@ -145,7 +146,7 @@ class Engine:
         self.vectors.ensure(dim)
         self.vectors.restore_points(snap["points"])
         with self.db.connect() as conn:
-            conn.execute("delete from bm25_postings")
+            delete_postings(conn, "true")
             conn.execute("delete from chunks")
             for row in snap["chunks"]:
                 conn.execute(
@@ -158,15 +159,13 @@ class Engine:
                         row["piece"], row["text"], row["token_count"],
                     ),
                 )
-            for row in snap["postings"]:
-                conn.execute(
-                    """
-                    insert into bm25_postings (generation, tokenizer, term, chunk_id, tf, doc_len)
-                    values (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (row["generation"], row["tokenizer"], row["term"], row["chunk_id"], row["tf"], row["doc_len"]),
-                )
-            rebuild_bm25(conn)
+            write_postings(
+                conn,
+                [
+                    (row["generation"], row["tokenizer"], row["term"], row["chunk_id"], row["tf"], row["doc_len"])
+                    for row in snap["postings"]
+                ],
+            )
             for row in snap["statuses"]:
                 conn.execute(
                     """
@@ -240,7 +239,6 @@ class Engine:
                 conn.rollback()
                 return "stale"
             delete_chunks_for(conn, rid)
-            rebuild_bm25(conn)
             conn.execute(
                 """
                 update records set indexing_status = 'EMPTY', has_indexed_copy = false, failure_reason = null, updated_at = now()
@@ -322,7 +320,6 @@ class Engine:
             delete_chunks_for(conn, rid)
             insert_chunks(conn, rid, chunk_rows)
             insert_weighted_postings(conn, "fastembed", sparse_docs, length_from_weight=False)
-            rebuild_bm25(conn)
             conn.execute(
                 """
                 update records set indexing_status = 'COMPLETED', has_indexed_copy = true,

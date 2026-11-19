@@ -49,7 +49,7 @@ class _Conn:
             return _Result([row for row in store["blocks"] if row["record_id"] == params[0]])
         if "from block_groups where record_id" in text and text.startswith("select"):
             return _Result([row for row in store["groups"] if row["record_id"] == params[0]])
-        if text.startswith("delete from bm25_postings where chunk_id in"):
+        if "delete from bm25_postings" in text and "chunk_id in" in text:
             ids = {row["chunk_id"] for row in store["chunks"] if row["record_id"] == params[0]}
             store["postings"] = [row for row in store["postings"] if row["chunk_id"] not in ids]
             return _Result([])
@@ -84,6 +84,30 @@ class _Conn:
         if text.startswith("insert into chunks"):
             keys = ("chunk_id", "record_id", "block_id", "block_index", "piece", "text", "token_count")
             store["chunks"].append(dict(zip(keys, params, strict=True)))
+            return _Result([])
+        if "unnest" in text and "insert into bm25_postings" in text:
+            generations, tokenizers, terms, chunk_ids, tfs, doc_lens = params
+            for generation, tokenizer, term, chunk_id, tf, doc_len in zip(
+                generations, tokenizers, terms, chunk_ids, tfs, doc_lens, strict=True
+            ):
+                row = {
+                    "generation": generation,
+                    "tokenizer": tokenizer,
+                    "term": term,
+                    "chunk_id": chunk_id,
+                    "tf": tf,
+                    "doc_len": doc_len,
+                }
+                store["postings"] = [
+                    item for item in store["postings"]
+                    if not (
+                        item["generation"] == row["generation"]
+                        and item["tokenizer"] == row["tokenizer"]
+                        and item["term"] == row["term"]
+                        and item["chunk_id"] == row["chunk_id"]
+                    )
+                ]
+                store["postings"].append(row)
             return _Result([])
         if text.startswith("insert into bm25_postings"):
             keys = ("generation", "tokenizer", "term", "chunk_id", "tf", "doc_len")

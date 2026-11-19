@@ -40,7 +40,6 @@ from kbindex.db import (
     kb_row,
     lock_record,
     read_record_index,
-    rebuild_bm25,
     record_id_for,
     record_row,
     recover_in_progress,
@@ -505,7 +504,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             index_snap = read_record_index(conn, rid)
             points = _record_points(app, str(rid))
             delete_chunks_for(conn, rid)
-            rebuild_bm25(conn)
             conn.execute("delete from records where record_id = %s", (rid,))
             conn.commit()
         _remove_files(snapshot)
@@ -842,7 +840,6 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
             index_snap = read_record_index(conn, rid)
             index_points = _record_points(app, str(rid))
             delete_chunks_for(conn, rid)
-            rebuild_bm25(conn)
             conn.execute(
                 """
                 update records set version = %s, revision_id = %s, content_rev = %s, blocks_sha = %s,
