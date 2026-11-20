@@ -21,6 +21,7 @@ embed = [
 ]
 dev = [
   "pytest>=8.3",
+  "fastembed==0.9.1",
 ]
 
 [project.scripts]
