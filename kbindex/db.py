@@ -152,12 +152,18 @@ ALTERS = (
       max_upload_bytes bigint not null default 16777216,
       requested_model text,
       score_threshold_enabled boolean not null default false,
-      score_threshold double precision
+      score_threshold double precision,
+      pause_until timestamptz,
+      pause_kind text,
+      requested_device text
     )
     """,
     "insert into app_settings (id) values (1) on conflict (id) do nothing",
     "alter table app_settings add column if not exists score_threshold_enabled boolean not null default false",
     "alter table app_settings add column if not exists score_threshold double precision",
+    "alter table app_settings add column if not exists pause_until timestamptz",
+    "alter table app_settings add column if not exists pause_kind text",
+    "alter table app_settings add column if not exists requested_device text",
     "alter table records add column if not exists has_indexed_copy boolean not null default false",
     "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
@@ -468,6 +474,19 @@ def save_score_threshold(conn, *, enabled: bool, threshold: float) -> dict[str, 
     return app_settings_row(conn)
 
 
+def save_pause(conn, *, kind: str | None, until) -> dict[str, Any]:
+    conn.execute(
+        "update app_settings set pause_kind = %s, pause_until = %s where id = 1",
+        (kind, until),
+    )
+    return app_settings_row(conn)
+
+
+def save_requested_device(conn, device: str) -> dict[str, Any]:
+    conn.execute("update app_settings set requested_device = %s where id = 1", (device,))
+    return app_settings_row(conn)
+
+
 def list_kbs(conn) -> list[dict[str, Any]]:
     return list(conn.execute("select id, name from knowledge_bases order by id").fetchall())
 
@@ -476,12 +495,97 @@ def list_record_status(conn, kb_id: str, limit: int = 100) -> list[dict[str, Any
     return list(
         conn.execute(
             """
-            select record_id, external_record_id, record_name, indexing_status, failure_reason, version
+            select record_id, external_record_id, record_name, indexing_status, failure_reason, version,
+                   source_modified_ms, updated_at
             from records where kb_id = %s
-            order by updated_at desc
+            order by (indexing_status = 'FAILED') desc,
+                     (indexing_status = 'IN_PROGRESS') desc,
+                     updated_at desc
             limit %s
             """,
             (kb_id, limit),
+        ).fetchall()
+    )
+
+
+def ingest_folder_counts(conn) -> list[dict[str, Any]]:
+    return list(
+        conn.execute(
+            """
+            select r.kb_id, k.name,
+                   count(*) as total,
+                   count(*) filter (where r.indexing_status = 'FAILED') as failed,
+                   count(*) filter (where r.indexing_status = 'IN_PROGRESS') as active,
+                   count(*) filter (where r.indexing_status = 'QUEUED') as queued,
+                   count(*) filter (where r.indexing_status = 'COMPLETED') as completed,
+                   count(*) filter (where r.indexing_status in ('COMPLETED', 'EMPTY', 'FAILED')) as done
+            from records r
+            join knowledge_bases k on k.id = r.kb_id
+            group by r.kb_id, k.name
+            order by k.name
+            """
+        ).fetchall()
+    )
+
+
+def current_ingest_record(conn) -> dict[str, Any] | None:
+    return conn.execute(
+        """
+        select r.record_name, r.kb_id, k.name as kb_name
+        from records r
+        join knowledge_bases k on k.id = r.kb_id
+        where r.indexing_status = 'IN_PROGRESS'
+        order by r.updated_at desc
+        limit 1
+        """
+    ).fetchone()
+
+
+def latest_record_update(conn):
+    return conn.execute("select max(updated_at) as updated_at from records").fetchone()
+
+
+def recent_record_events(conn, limit: int) -> list[dict[str, Any]]:
+    return list(
+        conn.execute(
+            """
+            select r.record_name, r.indexing_status, r.updated_at, k.name as kb_name
+            from records r
+            join knowledge_bases k on k.id = r.kb_id
+            order by r.updated_at desc
+            limit %s
+            """,
+            (limit,),
+        ).fetchall()
+    )
+
+
+def count_reindexable(conn) -> int:
+    row = conn.execute("select count(*) as n from records where indexing_status <> 'EMPTY'").fetchone()
+    return int(row["n"])
+
+
+def queue_failed_records(conn, kb_id: str | None) -> list[dict[str, Any]]:
+    if kb_id is None:
+        return list(
+            conn.execute(
+                """
+                update records
+                set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+                where indexing_status = 'FAILED'
+                returning record_id, kb_id, external_record_id, version, content_rev
+                """
+            ).fetchall()
+        )
+    return list(
+        conn.execute(
+            """
+            update records
+            set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+            where indexing_status = 'FAILED' and kb_id = %s
+            returning record_id, kb_id, external_record_id, version, content_rev
+            """,
+            (kb_id,),
         ).fetchall()
     )
 

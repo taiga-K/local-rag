@@ -1,7 +1,6 @@
 export const SCREENS = [
-  { id: "folders", title: "取り込むフォルダ" },
-  { id: "index", title: "索引" },
-  { id: "status", title: "取り込み状況" },
+  { id: "overview", title: "概要" },
+  { id: "settings", title: "設定" },
 ] as const;
 
 export type ScreenId = (typeof SCREENS)[number]["id"];
@@ -42,6 +41,61 @@ export function countRows(counts: Record<string, number>): { status: string; cou
 
 export function showsAdminControls(): false {
   return false;
+}
+
+export function failureLine(classified: boolean, message: string | null): string {
+  if (classified && message) {
+    return message;
+  }
+  return "理由は分類できません。";
+}
+
+export function statusLabel(status: string): string {
+  switch (status) {
+    case "COMPLETED":
+      return "取り込み済み";
+    case "IN_PROGRESS":
+      return "取り込み中";
+    case "QUEUED":
+      return "取り込み待ち";
+    case "FAILED":
+      return "失敗";
+    case "EMPTY":
+      return "本文なし";
+    case "AUTO_INDEX_OFF":
+      return "自動取り込み停止";
+    case "NOT_STARTED":
+      return "未着手";
+    default:
+      return "分類できない状態";
+  }
+}
+
+export function folderSentence(folder: { total: number; completed: number; active: number; failed: number; queued: number }): string {
+  if (folder.total === 0) {
+    return "ファイルはありません。";
+  }
+  if (folder.active === 0 && folder.failed === 0 && folder.queued === 0) {
+    return `${folder.total}件を取り込み済みです。`;
+  }
+  return `${folder.total}件のうち${folder.completed}件を取り込み済み、${folder.active}件は取り込み中、${folder.failed}件は取り込めませんでした。`;
+}
+
+export function visibleRecords<T extends { recordName: string; indexingStatus: string }>(
+  records: T[],
+  query: string,
+  failedOnly: boolean,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  return records.filter((row) => {
+    if (failedOnly && row.indexingStatus !== "FAILED") {
+      return false;
+    }
+    if (needle && !row.recordName.toLowerCase().includes(needle)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 export type SettingsDraft = {

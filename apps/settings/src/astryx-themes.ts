@@ -1,4 +1,28 @@
-import { neutralTheme } from "@astryxdesign/theme-neutral";
+import { defineTheme } from "@astryxdesign/core/theme";
 
-export const themes = { neutral: neutralTheme };
-export const defaultThemeSlug = "neutral" as const;
+export const localRagTheme = defineTheme({
+  name: "local-rag",
+  motion: { character: "crisp" },
+  tokens: {
+    "--color-text-primary": "#2C2C2B",
+    "--color-text-secondary": "#7D7A75",
+    "--color-background-body": "#FFFFFF",
+    "--color-background-surface": "#F9F8F7",
+    "--color-background-muted": "#F9F8F7",
+    "--color-border": "rgba(42,28,0,0.07)",
+    "--color-border-emphasized": "rgba(28,19,1,0.11)",
+    "--color-accent": "#2383E2",
+    "--color-on-accent": "#FFFFFF",
+    "--color-error": "#E03E3E",
+    "--radius-element": "6px",
+    "--radius-container": "10px",
+    "--radius-page": "12px",
+    "--size-element-md": "28px",
+    "--size-element-sm": "24px",
+    "--font-family-body": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", ui-sans-serif, sans-serif',
+    "--font-family-heading": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", ui-sans-serif, sans-serif',
+  },
+});
+
+export const themes = { "local-rag": localRagTheme };
+export const defaultThemeSlug = "local-rag" as const;

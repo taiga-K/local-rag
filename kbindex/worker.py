@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
 import psycopg
 import redis
 
 from kbindex.config import load_settings
-from kbindex.db import Database, delete_postings, record_id_for, record_row, recover_in_progress
+from kbindex.db import Database, app_settings_row, delete_postings, record_id_for, record_row, recover_in_progress
+from kbindex.ingest_ui import pause_is_active
 from kbindex.embed import load_embedder
 from kbindex.pipeline import Engine
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
@@ -70,11 +72,20 @@ def _recover(db: Database, client, lanes: int) -> None:
         )
 
 
+def _ingest_paused(db: Database) -> bool:
+    with db.connect() as conn:
+        row = app_settings_row(conn)
+    return pause_is_active(row.get("pause_kind"), row.get("pause_until"), datetime.now(timezone.utc))
+
+
 def _handle(engine: Engine, db: Database, client, stream_name: str, message_id: str, fields: dict) -> None:
     event = read_event(fields)
     if event["eventType"] == "deleteRecord":
         _delete(engine, db, event)
         client.xack(stream_name, GROUP, message_id)
+        return
+    if _ingest_paused(db):
+        time.sleep(1)
         return
     if not event["kbId"] or not event["externalRecordId"]:
         client.xack(stream_name, GROUP, message_id)

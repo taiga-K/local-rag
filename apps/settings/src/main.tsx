@@ -5,6 +5,8 @@ import { themes, defaultThemeSlug } from "./astryx-themes";
 import { App } from "./App";
 import "@astryxdesign/core/reset.css";
 import "@astryxdesign/core/astryx.css";
+import "./motion.css";
+import "./shell.css";
 
 const root = document.getElementById("root");
 if (!root) {
@@ -12,7 +14,7 @@ if (!root) {
 }
 createRoot(root).render(
   <StrictMode>
-    <Theme theme={themes[defaultThemeSlug]}>
+    <Theme theme={themes[defaultThemeSlug]} mode="light">
       <App />
     </Theme>
   </StrictMode>,
