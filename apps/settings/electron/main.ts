@@ -35,6 +35,15 @@ ipcMain.handle("localrag:open-path", async (_event, raw: unknown) => {
   if (!folders.some((folder) => insideFolder(folder, target))) {
     return { ok: false, error: "outside" };
   }
+  let directory = false;
+  try {
+    directory = fs.statSync(target).isDirectory();
+  } catch {
+    directory = false;
+  }
+  if (!directory) {
+    return { ok: false, error: "directory" };
+  }
   const opened = await shell.openPath(target);
   return { ok: opened === "", error: opened || null };
 });

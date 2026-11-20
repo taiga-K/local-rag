@@ -243,6 +243,7 @@ export function SettingsDialog({
                 onApply={() => {
                   const previous = embedding.requestedDevice || embedding.device;
                   void saveDevice(device).then(() => {
+                    setEmbedding({ ...embedding, requestedDevice: device });
                     setNotice(null);
                     setNote("再起動すると反映されます。");
                   }).catch((error: unknown) => {
