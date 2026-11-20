@@ -8,20 +8,23 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-CLASSIFIED_FAILURES = {
-    "QDRANT_UNAVAILABLE": "索引の保存先に接続できません。復旧してから再試行してください。",
-}
+NO_STORED_FAILURE = "原因が記録されていません。再試行しても失敗する場合はファイルを開けるか確かめてください。"
+BLANK_FAILURES = {"", "INDEX_FAILED"}
+FAILURE_LIMIT = 160
 
 PAUSE_KINDS = ("30m", "1h", "tomorrow", "resume")
 
 
 def failure_fields(status: str, reason: str | None) -> dict[str, bool | str | None]:
+    """Show the stored error as written. Do not invent a cause."""
     if status != "FAILED":
         return {"failureClassified": False, "failureMessage": None}
-    message = CLASSIFIED_FAILURES.get(reason or "")
-    if message is None:
-        return {"failureClassified": False, "failureMessage": None}
-    return {"failureClassified": True, "failureMessage": message}
+    text = (reason or "").strip()
+    if text in BLANK_FAILURES:
+        return {"failureClassified": False, "failureMessage": NO_STORED_FAILURE}
+    if len(text) > FAILURE_LIMIT:
+        text = text[: FAILURE_LIMIT - 1] + "…"
+    return {"failureClassified": True, "failureMessage": text}
 
 
 def activity_sentence(name: str, status: str) -> str:

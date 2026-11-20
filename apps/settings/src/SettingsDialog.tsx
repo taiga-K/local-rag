@@ -33,12 +33,15 @@ export function SettingsDialog({
   const [notice, setNotice] = useState<"model" | "device" | null>(null);
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
+  const [thresholdText, setThresholdText] = useState("0.84");
+  const [otherModel, setOtherModel] = useState("");
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setOpen(true));
     void Promise.all([loadSettings(), loadRetrieveSettings(), loadEmbedding()]).then(([settings, score, embed]) => {
       setLocal(settings);
       setRetrieve(score);
+      setThresholdText(String(score.scoreThreshold));
       setEmbedding(embed);
       setModel(embed.model);
       setDevice(embed.requestedDevice || embed.device);
@@ -109,18 +112,34 @@ export function SettingsDialog({
                 >
                   {embedding.models.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
+                <input
+                  className="field"
+                  aria-label="別のモデル名"
+                  value={otherModel}
+                  placeholder="別のモデル名"
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setOtherModel(next);
+                    const chosen = next.trim();
+                    setNotice(chosen && chosen !== embedding.model ? "model" : model !== embedding.model ? "model" : null);
+                  }}
+                />
               </SettingRow>
               <Impact
                 open={notice === "model"}
                 text={impact}
                 onCancel={() => {
                   setModel(embedding.model);
+                  setOtherModel("");
                   setNotice(null);
                 }}
                 onApply={() => {
-                  void saveEmbeddingModel(model).then(() => {
+                  const chosen = otherModel.trim() || model;
+                  void saveEmbeddingModel(chosen, embedding.dimension).then(() => {
                     setNotice(null);
-                    setEmbedding({ ...embedding, model });
+                    setOtherModel("");
+                    setModel(chosen);
+                    setEmbedding({ ...embedding, model: chosen });
                   }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "変更できませんでした"));
                 }}
               />
@@ -161,7 +180,13 @@ export function SettingsDialog({
           {cat === "検索結果" && retrieve ? (
             <SettingRow
               name="類似度のしきい値"
-              desc="オンにすると、質問との類似度がこの値より低い文書を検索結果から外します。結果が0件になることがあります。"
+              desc={
+                <>
+                  オンにすると、質問との類似度がこの値より低い文書を検索結果から外します。結果が
+                  <span className="nowrap">0件</span>
+                  になることがあります。
+                </>
+              }
             >
               <span className="switch-line">
                 <input
@@ -169,14 +194,19 @@ export function SettingsDialog({
                   aria-label="類似度のしきい値"
                   inputMode="decimal"
                   disabled={!retrieve.scoreThresholdEnabled}
-                  value={String(retrieve.scoreThreshold)}
-                  onChange={(event) => setRetrieve({ ...retrieve, scoreThreshold: Number(event.target.value) })}
+                  value={thresholdText}
+                  onChange={(event) => setThresholdText(event.target.value)}
                   onBlur={() => {
-                    const number = Number(retrieve.scoreThreshold);
-                    if (!Number.isFinite(number)) {
+                    const number = Number(thresholdText);
+                    if (!Number.isFinite(number) || number < -1 || number > 1) {
+                      setThresholdText(String(retrieve.scoreThreshold));
                       return;
                     }
-                    void saveRetrieveSettings({ ...retrieve, scoreThreshold: number }).then(setRetrieve).catch((error: unknown) => {
+                    const saved = { ...retrieve, scoreThreshold: number };
+                    void saveRetrieveSettings(saved).then((body) => {
+                      setRetrieve(body);
+                      setThresholdText(String(body.scoreThreshold));
+                    }).catch((error: unknown) => {
                       setNote(error instanceof Error ? error.message : "保存に失敗しました");
                     });
                   }}
@@ -220,7 +250,7 @@ export function SettingsDialog({
   );
 }
 
-function SettingRow({ name, desc, children }: { name: string; desc: string; children: ReactNode }) {
+function SettingRow({ name, desc, children }: { name: string; desc: ReactNode; children: ReactNode }) {
   return (
     <div className="set-row">
       <div>

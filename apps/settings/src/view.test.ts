@@ -100,15 +100,15 @@ describe("settings view", () => {
   });
 
   it("does not invent a failure sentence", () => {
-    expect(failureLine(true, "索引の保存先に接続できません。復旧してから再試行してください。")).toContain("接続できません");
-    expect(failureLine(false, null)).toBe("理由は分類できません。");
+    expect(failureLine(true, "QDRANT_UNAVAILABLE")).toBe("QDRANT_UNAVAILABLE");
+    expect(failureLine(false, null)).toContain("原因が記録されていません");
     expect(statusLabel("FAILED")).toBe("失敗");
     expect(statusLabel("UNKNOWN")).toBe("分類できない状態");
   });
 
   it("counts a folder from its own numbers and filters the table", () => {
     expect(folderSentence({ total: 4, completed: 4, active: 0, failed: 0, queued: 0 })).toBe("4件を取り込み済みです。");
-    expect(folderSentence({ total: 3, completed: 1, active: 1, failed: 1, queued: 0 })).toContain("1件は取り込めませんでした");
+    expect(folderSentence({ total: 4, completed: 1, active: 1, failed: 1, queued: 1 })).toContain("1件は取り込み待ち");
     const rows = [
       { recordName: "議事録", indexingStatus: "COMPLETED" },
       { recordName: "予算", indexingStatus: "FAILED" },

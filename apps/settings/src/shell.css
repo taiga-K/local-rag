@@ -215,6 +215,7 @@ input.field:disabled, .threshold-field.is-off { opacity: 0.4; }
 .switch__thumb { width: 12px; height: 12px; border-radius: 8px; background: #fff; display: block; }
 .switch-line { display: flex; align-items: center; gap: 8px; flex: none; white-space: nowrap; }
 .switch-word { color: var(--text-2); font-size: 12px; line-height: 16px; }
+.nowrap { white-space: nowrap; }
 .spinner { width: 16px; height: 16px; border: 1.25px solid var(--text-2); border-right-color: transparent; border-radius: 8px; }
 .confirm {
   position: fixed;

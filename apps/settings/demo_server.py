@@ -50,14 +50,15 @@ def _seed() -> dict:
         notes.append(_record("notes", f"待ち {index + 1}.docx", "QUEUED", None, 3000 + index))
     specs = [_record("specs", f"仕様 {index + 1}.md", "COMPLETED", None, 4000 + index) for index in range(4)]
     return {
-        "local": {"folders": [r"C:\Users\taiga\Documents\議事録"], "includeSubfolders": True, "autoIndex": True},
-        "retrieve": {"scoreThresholdEnabled": False, "scoreThreshold": 0.5},
+        "local": {"folders": ["/tmp/local-rag-demo/議事録"], "includeSubfolders": True, "autoIndex": True},
+        "retrieve": {"scoreThresholdEnabled": False, "scoreThreshold": 0.84},
         "embedding": {
             "model": "cl-nagoya/ruri-v3-310m",
             "device": "cpu",
             "requestedModel": None,
             "requestedDevice": None,
             "keyword": "fastembed",
+            "dimension": 768,
             "models": ["cl-nagoya/ruri-v3-310m", "cl-nagoya/ruri-v3-130m"],
             "devices": ["cpu", "cuda"],
         },
@@ -99,7 +100,9 @@ def _summary(now: datetime) -> dict:
         active = sum(1 for row in rows if row["indexingStatus"] == "IN_PROGRESS")
         queued = sum(1 for row in rows if row["indexingStatus"] == "QUEUED")
         completed = sum(1 for row in rows if row["indexingStatus"] == "COMPLETED")
-        done = sum(1 for row in rows if row["indexingStatus"] in {"COMPLETED", "EMPTY", "FAILED"})
+        empty = sum(1 for row in rows if row["indexingStatus"] == "EMPTY")
+        held = sum(1 for row in rows if row["indexingStatus"] == "AUTO_INDEX_OFF")
+        done = completed + empty
         folders.append({
             "id": kb_id,
             "name": name,
@@ -108,6 +111,8 @@ def _summary(now: datetime) -> dict:
             "active": active,
             "queued": queued,
             "completed": completed,
+            "empty": empty,
+            "held": held,
             "done": done,
         })
         for row in rows:
@@ -124,6 +129,7 @@ def _summary(now: datetime) -> dict:
         "active": sum(item["active"] for item in folders),
         "queued": sum(item["queued"] for item in folders),
         "failed": sum(item["failed"] for item in folders),
+        "held": sum(item["held"] for item in folders),
         "reindexCount": sum(1 for rows in STATE["records"].values() for row in rows if row["indexingStatus"] != "EMPTY"),
         "latestAt": latest,
         "current": current,
@@ -201,7 +207,12 @@ class Handler(BaseHTTPRequestHandler):
                 kb_id = path.split("/")[4]
                 rows = STATE["records"].get(kb_id, [])
                 ordered = sorted(rows, key=lambda row: (row["indexingStatus"] != "FAILED", row["indexingStatus"] != "IN_PROGRESS", row["updatedAt"]), reverse=False)
-                self._send(200, {"records": [_public(row) for row in ordered[:100]]})
+                query = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+                limit = int(params.get("limit", "200") or 200)
+                offset = int(params.get("offset", "0") or 0)
+                page = ordered[offset:offset + limit]
+                self._send(200, {"records": [_public(row) for row in page]})
                 return
         self._send(404, {"error": {"message": "not found"}})
 
@@ -230,7 +241,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/v1/ingest/pause":
                 kind = payload.get("kind")
-                until = None if kind is None else pause_deadline(kind, now)
+                raw_until = payload.get("until")
+                if kind == "tomorrow" and isinstance(raw_until, str):
+                    until = datetime.fromisoformat(raw_until.replace("Z", "+00:00"))
+                else:
+                    until = None if kind is None else pause_deadline(kind, now)
                 STATE["pause"] = {"kind": kind, "until": until}
                 self._send(200, _summary(now)["pause"])
                 return

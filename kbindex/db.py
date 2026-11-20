@@ -491,7 +491,7 @@ def list_kbs(conn) -> list[dict[str, Any]]:
     return list(conn.execute("select id, name from knowledge_bases order by id").fetchall())
 
 
-def list_record_status(conn, kb_id: str, limit: int = 100) -> list[dict[str, Any]]:
+def list_record_status(conn, kb_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     return list(
         conn.execute(
             """
@@ -501,11 +501,19 @@ def list_record_status(conn, kb_id: str, limit: int = 100) -> list[dict[str, Any
             order by (indexing_status = 'FAILED') desc,
                      (indexing_status = 'IN_PROGRESS') desc,
                      updated_at desc
-            limit %s
+            limit %s offset %s
             """,
-            (kb_id, limit),
+            (kb_id, limit, offset),
         ).fetchall()
     )
+
+
+def list_external_ids(conn, kb_id: str) -> list[str]:
+    rows = conn.execute(
+        "select external_record_id from records where kb_id = %s order by external_record_id",
+        (kb_id,),
+    ).fetchall()
+    return [row["external_record_id"] for row in rows]
 
 
 def ingest_folder_counts(conn) -> list[dict[str, Any]]:
@@ -518,7 +526,9 @@ def ingest_folder_counts(conn) -> list[dict[str, Any]]:
                    count(*) filter (where r.indexing_status = 'IN_PROGRESS') as active,
                    count(*) filter (where r.indexing_status = 'QUEUED') as queued,
                    count(*) filter (where r.indexing_status = 'COMPLETED') as completed,
-                   count(*) filter (where r.indexing_status in ('COMPLETED', 'EMPTY', 'FAILED')) as done
+                   count(*) filter (where r.indexing_status = 'EMPTY') as empty,
+                   count(*) filter (where r.indexing_status = 'AUTO_INDEX_OFF') as held,
+                   count(*) filter (where r.indexing_status in ('COMPLETED', 'EMPTY')) as done
             from records r
             join knowledge_bases k on k.id = r.kb_id
             group by r.kb_id, k.name

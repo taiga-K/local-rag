@@ -110,7 +110,8 @@ export function Overview({
   async function pause(kind: string | null) {
     setMenu(false);
     menuButton.current?.focus();
-    await setPause(kind);
+    const until = kind === "tomorrow" ? nextLocalMidnight() : null;
+    await setPause(kind, until);
     await onReload();
   }
 
@@ -209,7 +210,22 @@ export function Overview({
                   setHeld((current) => ({ ...current, [row.recordId]: row }));
                   setPhase((current) => ({ ...current, [row.recordId]: "working" }));
                 }
+                const ids = visible.map((row) => row.recordId);
                 void retryFailed().then(() => onReload()).catch((error: unknown) => {
+                  setPhase((current) => {
+                    const next = { ...current };
+                    for (const id of ids) {
+                      delete next[id];
+                    }
+                    return next;
+                  });
+                  setHeld((current) => {
+                    const next = { ...current };
+                    for (const id of ids) {
+                      delete next[id];
+                    }
+                    return next;
+                  });
                   setNote(error instanceof Error ? error.message : "再試行に失敗しました");
                 });
               }}
@@ -243,7 +259,7 @@ export function Overview({
       <section className="section">
         <div className="sec-head">
           <h2>最近の変更</h2>
-          {showAll ? null : <button className="text-link" type="button" onClick={onShowAll}>すべての履歴</button>}
+          {showAll ? null : <button className="quiet" type="button" onClick={onShowAll}>すべての履歴</button>}
         </div>
         <div className="rows">
           {activity.map((event, index) => (
@@ -280,7 +296,10 @@ function FailRow({
       data-state={phase === "done" ? "done" : "open"}
       aria-busy={phase === "working"}
       onTransitionEnd={(event) => {
-        if (phase === "done" && event.propertyName === "grid-template-rows") {
+        if (phase !== "done" || event.target !== event.currentTarget) {
+          return;
+        }
+        if (event.propertyName === "opacity" || event.propertyName === "grid-template-rows") {
           onDone();
         }
       }}
@@ -314,11 +333,21 @@ function headlineOf(summary: Summary): { title: string; rest: string; caption: s
   if (summary.active > 0 || summary.queued > 0) {
     return { title: "取り込み中です", rest: counts, caption: "" };
   }
+  if (summary.failed > 0 || (summary.held ?? 0) > 0) {
+    return { title: "取り込みが終わっていません", rest: counts, caption: "" };
+  }
   return {
     title: "すべて取り込み済みです",
     rest: "",
     caption: `${summary.total}件${summary.latestAt ? `　${longStamp(summary.latestAt)} 時点` : ""}`,
   };
+}
+
+function nextLocalMidnight(): string {
+  const next = new Date();
+  next.setDate(next.getDate() + 1);
+  next.setHours(0, 0, 0, 0);
+  return next.toISOString();
 }
 
 export type { FolderCount };

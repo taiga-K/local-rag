@@ -26,6 +26,8 @@ export type FolderCount = {
   active: number;
   queued: number;
   completed: number;
+  empty?: number;
+  held?: number;
 };
 
 export type Summary = {
@@ -34,6 +36,7 @@ export type Summary = {
   active: number;
   queued: number;
   failed: number;
+  held?: number;
   reindexCount: number;
   latestAt: string | null;
   current: { recordName: string; kbId: string; kbName: string } | null;
@@ -52,6 +55,7 @@ export type EmbeddingInfo = {
   requestedModel: string | null;
   requestedDevice: string | null;
   keyword: string;
+  dimension: number;
   models: string[];
   devices: string[];
 };
@@ -98,18 +102,27 @@ export function loadActivity(limit = 8): Promise<Activity> {
   return send(`/api/v1/ingest/activity?limit=${limit}`, "GET") as Promise<Activity>;
 }
 
-export function setPause(kind: string | null): Promise<Summary["pause"]> {
-  return send("/api/v1/ingest/pause", "PUT", { kind }) as Promise<Summary["pause"]>;
+export function setPause(kind: string | null, until?: string | null): Promise<Summary["pause"]> {
+  return send("/api/v1/ingest/pause", "PUT", { kind, until: until ?? null }) as Promise<Summary["pause"]>;
 }
 
 export function retryFailed(): Promise<{ queued: number }> {
   return send("/api/v1/ingest/retry-failed", "POST", {}) as Promise<{ queued: number }>;
 }
 
-export function loadRecords(kbId: string): Promise<RecordRow[]> {
-  return send(`/api/v1/kb/${encodeURIComponent(kbId)}/records?limit=100`, "GET").then(
-    (body) => (body as { records: RecordRow[] }).records,
-  );
+export async function loadRecords(kbId: string): Promise<RecordRow[]> {
+  const pageSize = 200;
+  const all: RecordRow[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const body = (await send(
+      `/api/v1/kb/${encodeURIComponent(kbId)}/records?limit=${pageSize}&offset=${offset}`,
+      "GET",
+    )) as { records: RecordRow[] };
+    all.push(...body.records);
+    if (body.records.length < pageSize) {
+      return all;
+    }
+  }
 }
 
 export function reprocessRecord(kbId: string, externalRecordId: string): Promise<unknown> {
@@ -136,8 +149,8 @@ export function loadEmbedding(): Promise<EmbeddingInfo> {
   return send("/api/v1/engineer/embedding", "GET") as Promise<EmbeddingInfo>;
 }
 
-export function saveEmbeddingModel(model: string): Promise<unknown> {
-  return send("/api/v1/engineer/embedding", "PUT", { model });
+export function saveEmbeddingModel(model: string, dimension: number): Promise<unknown> {
+  return send("/api/v1/engineer/embedding", "PUT", { model, dimension });
 }
 
 export function saveDevice(device: string): Promise<unknown> {

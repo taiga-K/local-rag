@@ -43,11 +43,14 @@ export function showsAdminControls(): false {
   return false;
 }
 
+const NO_STORED_FAILURE = "原因が記録されていません。再試行しても失敗する場合はファイルを開けるか確かめてください。";
+
 export function failureLine(classified: boolean, message: string | null): string {
-  if (classified && message) {
-    return message;
+  const text = (message ?? "").trim();
+  if (classified && text && text !== "INDEX_FAILED") {
+    return text;
   }
-  return "理由は分類できません。";
+  return NO_STORED_FAILURE;
 }
 
 export function statusLabel(status: string): string {
@@ -71,14 +74,40 @@ export function statusLabel(status: string): string {
   }
 }
 
-export function folderSentence(folder: { total: number; completed: number; active: number; failed: number; queued: number }): string {
+export function folderSentence(folder: {
+  total: number;
+  completed: number;
+  active: number;
+  failed: number;
+  queued: number;
+  held?: number;
+  empty?: number;
+}): string {
   if (folder.total === 0) {
     return "ファイルはありません。";
   }
-  if (folder.active === 0 && folder.failed === 0 && folder.queued === 0) {
+  const held = folder.held ?? 0;
+  const empty = folder.empty ?? 0;
+  if (folder.active === 0 && folder.failed === 0 && folder.queued === 0 && held === 0) {
     return `${folder.total}件を取り込み済みです。`;
   }
-  return `${folder.total}件のうち${folder.completed}件を取り込み済み、${folder.active}件は取り込み中、${folder.failed}件は取り込めませんでした。`;
+  const parts = [`${folder.completed}件を取り込み済み`];
+  if (folder.queued > 0) {
+    parts.push(`${folder.queued}件は取り込み待ち`);
+  }
+  if (folder.active > 0) {
+    parts.push(`${folder.active}件は取り込み中`);
+  }
+  if (folder.failed > 0) {
+    parts.push(`${folder.failed}件は取り込めませんでした`);
+  }
+  if (held > 0) {
+    parts.push(`${held}件は自動取り込みを止めています`);
+  }
+  if (empty > 0) {
+    parts.push(`${empty}件は本文がありません`);
+  }
+  return `${folder.total}件のうち${parts.join("、")}。`;
 }
 
 export function visibleRecords<T extends { recordName: string; indexingStatus: string }>(

@@ -7,11 +7,15 @@ from kbindex.ingest_ui import activity_sentence, failure_fields, pause_deadline,
 
 def test_only_qdrant_has_a_classified_sentence():
     shown = failure_fields("FAILED", "QDRANT_UNAVAILABLE")
-    assert shown["failureClassified"] is True
-    assert "接続できません" in shown["failureMessage"]
+    assert shown == {"failureClassified": True, "failureMessage": "QDRANT_UNAVAILABLE"}
     hidden = failure_fields("FAILED", "INDEX_FAILED")
-    assert hidden == {"failureClassified": False, "failureMessage": None}
-    assert failure_fields("FAILED", "ValueError")["failureClassified"] is False
+    assert hidden["failureClassified"] is False
+    assert "原因が記録されていません" in str(hidden["failureMessage"])
+    long = failure_fields("FAILED", "x" * 180)
+    assert long["failureClassified"] is True
+    assert str(long["failureMessage"]).endswith("…")
+    assert len(str(long["failureMessage"])) == 160
+    assert failure_fields("FAILED", "ValueError: bad block")["failureMessage"] == "ValueError: bad block"
     assert failure_fields("COMPLETED", "QDRANT_UNAVAILABLE")["failureMessage"] is None
 
 

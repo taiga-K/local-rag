@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { detachKb, loadRecords, reprocessRecord, type FolderCount, type LocalSettings, type RecordRow } from "./api";
+import { configuredFolder, folderBridge } from "./bridge";
 import { stamp } from "./format";
 import { Icon } from "./icons";
 import { failureLine, folderSentence, statusLabel, visibleRecords } from "./view";
@@ -36,6 +37,8 @@ export function FolderScreen({
   }, [folder]);
 
   const shown = visibleRecords(records, query, failedOnly);
+  const openable = local ? configuredFolder(local.folders, folder.name) : null;
+  const bridge = folderBridge();
   return (
     <div className="col">
       <div className="page-head">
@@ -47,7 +50,21 @@ export function FolderScreen({
           </div>
         </div>
         <div style={{ display: "flex", gap: 4 }}>
-          <button className="quiet" type="button" onClick={() => setNote("この画面ではフォルダを開けません。")}>エクスプローラーで開く</button>
+          {openable && bridge ? (
+            <button
+              className="quiet"
+              type="button"
+              onClick={() => {
+                void bridge.openPath(openable).then((result) => {
+                  if (!result.ok) {
+                    setNote(result.error || "フォルダを開けませんでした");
+                  }
+                });
+              }}
+            >
+              エクスプローラーで開く
+            </button>
+          ) : null}
           <button className="quiet" type="button" onClick={() => setConfirm(true)}>取り込みから外す</button>
         </div>
       </div>

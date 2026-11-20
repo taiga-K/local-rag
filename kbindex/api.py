@@ -36,6 +36,7 @@ from kbindex.db import (
     current_ingest_record,
     ingest_folder_counts,
     latest_record_update,
+    list_external_ids,
     list_kbs,
     list_record_status,
     queue_failed_records,
@@ -151,6 +152,7 @@ class DeviceIn(BaseModel):
 class PauseIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     kind: str | None = None
+    until: str | None = None
 
 
 class RetrieveSettingsIn(BaseModel):
@@ -717,11 +719,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"knowledgeBases": [{"id": row["id"], "name": row["name"]} for row in rows]})
 
     @app.get("/api/v1/kb/{kb_id}/records")
-    def list_records(kb_id: str, limit: int = 100) -> JSONResponse:
+    def list_records(kb_id: str, limit: int = 100, offset: int = 0) -> JSONResponse:
         _require_kb(app, kb_id)
-        cap = 100 if isinstance(limit, bool) or not isinstance(limit, int) else min(max(limit, 1), 500)
+        cap = 100 if isinstance(limit, bool) or not isinstance(limit, int) else min(max(limit, 1), 200)
+        off = 0 if isinstance(offset, bool) or not isinstance(offset, int) else max(offset, 0)
         with app.state.db.connect() as conn:
-            rows = list_record_status(conn, kb_id, cap)
+            rows = list_record_status(conn, kb_id, cap, off)
         return JSONResponse({"records": [_record_public(row) for row in rows]})
 
     @app.get("/api/v1/settings/local")
@@ -809,6 +812,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "active": sum(int(row["active"]) for row in folders),
                 "queued": sum(int(row["queued"]) for row in folders),
                 "failed": sum(int(row["failed"]) for row in folders),
+                "held": sum(int(row["held"]) for row in folders),
                 "reindexCount": reindex_count,
                 "latestAt": _iso_z(None if latest is None else latest["updated_at"]),
                 "current": None
@@ -828,6 +832,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "active": int(row["active"]),
                         "queued": int(row["queued"]),
                         "completed": int(row["completed"]),
+                        "empty": int(row["empty"]),
+                        "held": int(row["held"]),
                     }
                     for row in folders
                 ],
@@ -843,7 +849,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if payload.kind is not None and payload.kind not in PAUSE_KINDS:
             raise PushRefusal(400, "ENVELOPE_INVALID", "pause kind is invalid.")
         now = datetime.now(timezone.utc)
-        until = None if payload.kind is None else pause_deadline(payload.kind, now)
+        if payload.kind == "tomorrow":
+            if not payload.until:
+                raise PushRefusal(400, "ENVELOPE_INVALID", "tomorrow needs a local until timestamp.")
+            try:
+                until = datetime.fromisoformat(payload.until.replace("Z", "+00:00"))
+            except ValueError:
+                raise PushRefusal(400, "ENVELOPE_INVALID", "until is not a timestamp.") from None
+            if until.tzinfo is None:
+                raise PushRefusal(400, "ENVELOPE_INVALID", "until needs an offset.")
+        else:
+            until = None if payload.kind is None else pause_deadline(payload.kind, now)
         with app.state.db.connect() as conn:
             row = save_pause(conn, kind=payload.kind, until=until)
             conn.commit()
@@ -890,10 +906,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def detach_kb(kb_id: str) -> JSONResponse:
         _require_kb(app, kb_id)
         with app.state.db.connect() as conn:
-            rows = list_record_status(conn, kb_id, 500)
+            ids = list_external_ids(conn, kb_id)
         deleted = 0
-        for row in rows:
-            delete_record(kb_id, row["external_record_id"])
+        for external_id in ids:
+            delete_record(kb_id, external_id)
             deleted += 1
         return JSONResponse({"deleted": deleted})
 
@@ -1309,13 +1325,18 @@ def _record_public(row) -> dict:
 
 def _embedding_body(app, row) -> dict:
     model = app.state.settings.model
+    models = [model]
+    requested = row.get("requested_model")
+    if isinstance(requested, str) and requested and requested not in models:
+        models.append(requested)
     return {
         "model": model,
         "device": app.state.settings.device,
-        "requestedModel": row.get("requested_model"),
+        "requestedModel": requested,
         "requestedDevice": row.get("requested_device"),
         "keyword": "fastembed",
-        "models": [model],
+        "dimension": int(app.state.embedder.dim),
+        "models": models,
         "devices": ["cpu", "cuda"],
     }
 
