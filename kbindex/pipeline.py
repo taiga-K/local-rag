@@ -16,6 +16,7 @@ from kbindex.chunking import chunk_blocks
 from kbindex.config import Settings
 from kbindex.contract import Envelope, block_text, blocks_digest, content_rev, properties_of, request_digest, stored_bytes
 from kbindex.db import (
+    NAMESPACE,
     Database,
     bm25_rows,
     chunk_public_id,
@@ -26,6 +27,7 @@ from kbindex.db import (
     insert_chunks,
     insert_weighted_postings,
     queue_records_with_text,
+    read_score_threshold,
     record_id_for,
     write_generation,
     write_postings,
@@ -37,6 +39,7 @@ from kbindex.fastembed_bm25 import document_weights, query_terms
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
 from kbindex.retrieve_cut import finish_retrieve, leg_depth
 from kbindex.rrf import rrf_scores
+from kbindex.similarity import apply_score_threshold, cosine
 
 
 @dataclass(frozen=True)
@@ -279,7 +282,7 @@ class Engine:
                 payload_out["sourceModifiedMs"] = int(updated["source_modified_ms"])
             points.append(
                 qm.PointStruct(
-                    id=str(uuid.uuid5(uuid.UUID("c3a1e5b0-7d2e-4b1a-9f60-4a0b1c2d3e4f"), cid)),
+                    id=str(uuid.uuid5(NAMESPACE, cid)),
                     vector={"dense": vector},
                     payload=payload_out,
                 )
@@ -363,15 +366,23 @@ class Engine:
         bounds: dict,
     ) -> dict:
         depth = leg_depth(limit, max_per_record)
-        dense_pairs = self.vectors.search(self.embedder.embed_query(query), limit=depth, kb_ids=kb_ids)
+        query_vector = self.embedder.embed_query(query)
+        dense_pairs = self.vectors.search(query_vector, limit=depth, kb_ids=kb_ids)
         sparse_pairs = self._fastembed(query, depth, kb_ids)
         ranked = rrf_scores(
             [[cid for cid, _score in dense_pairs], [cid for cid, _score in sparse_pairs]],
             k=1,
         )
-        fused = self._filter_fused(ranked, kb_ids, bounds)
-        limited = finish_retrieve(
+        fused, enabled, threshold = self._filter_fused(ranked, kb_ids, bounds)
+        # Threshold runs on the whole fused list, then finish_retrieve cuts to limit.
+        scored = apply_score_threshold(
             fused,
+            self._similarities(query_vector, [cid for cid, _score, _row in fused], enabled=enabled),
+            enabled=enabled,
+            threshold=threshold,
+        )
+        limited = finish_retrieve(
+            scored,
             page_limit=limit,
             query=query,
             max_per_record=max_per_record,
@@ -390,6 +401,7 @@ class Engine:
         ids = [cid for cid, _score in fused]
         with self.db.connect() as conn:
             rows = hydrate_chunks(conn, ids)
+            enabled, threshold = read_score_threshold(conn)
         by_id = {row["chunk_id"]: row for row in rows}
         kept = []
         for cid, score in fused:
@@ -404,10 +416,28 @@ class Engine:
             if not _in_bounds(row, bounds):
                 continue
             kept.append((cid, score, row))
-        return kept
+        return kept, enabled, threshold
+
+    def _similarities(self, query_vector: list[float], chunk_ids: list[str], *, enabled: bool) -> dict[str, float | None]:
+        """Cosine for every fused candidate, including BM25-only hits.
+
+        One retrieve covers the whole list. While the threshold is off, a
+        Qdrant failure leaves similarity null and still returns today's hits.
+        While it is on, that failure is the same 503 as a failed dense search,
+        because the filter cannot be decided.
+        """
+        if not chunk_ids:
+            return {}
+        try:
+            stored = self.vectors.dense_vectors(chunk_ids)
+        except QdrantUnavailable:
+            if enabled:
+                raise
+            return {cid: None for cid in chunk_ids}
+        return {cid: cosine(query_vector, stored[cid]) if cid in stored else None for cid in chunk_ids}
 
     def _chunk_json(self, item) -> dict:
-        cid, score, row = item
+        cid, score, row, similarity = item
         updated = row["source_modified_ms"]
         if updated is None and row["updated_at"] is not None:
             updated = int(row["updated_at"].timestamp() * 1000)
@@ -415,6 +445,7 @@ class Engine:
             "id": cid,
             "text": row["text"],
             "score": score,
+            "similarity": similarity,
             "record": {
                 "recordId": row["external_record_id"],
                 "name": row["record_name"],

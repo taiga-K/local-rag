@@ -10,6 +10,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from kbindex.similarity import DEFAULT_SCORE_THRESHOLD
+
 NAMESPACE = uuid.UUID("c3a1e5b0-7d2e-4b1a-9f60-4a0b1c2d3e4f")
 
 SCHEMA = """
@@ -148,10 +150,14 @@ ALTERS = (
       include_subfolders boolean not null default true,
       auto_index boolean not null default true,
       max_upload_bytes bigint not null default 16777216,
-      requested_model text
+      requested_model text,
+      score_threshold_enabled boolean not null default false,
+      score_threshold double precision
     )
     """,
     "insert into app_settings (id) values (1) on conflict (id) do nothing",
+    "alter table app_settings add column if not exists score_threshold_enabled boolean not null default false",
+    "alter table app_settings add column if not exists score_threshold double precision",
     "alter table records add column if not exists has_indexed_copy boolean not null default false",
     "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
@@ -433,6 +439,32 @@ def save_upload_limit(conn, max_upload_bytes: int) -> dict[str, Any]:
 
 def save_requested_model(conn, model: str) -> dict[str, Any]:
     conn.execute("update app_settings set requested_model = %s where id = 1", (model,))
+    return app_settings_row(conn)
+
+
+def score_threshold_payload(row: dict[str, Any]) -> dict[str, bool | float]:
+    """Enabled flag and the effective threshold. Null uses the one constant."""
+    raw = row["score_threshold"]
+    return {
+        "scoreThresholdEnabled": bool(row["score_threshold_enabled"]),
+        "scoreThreshold": DEFAULT_SCORE_THRESHOLD if raw is None else float(raw),
+    }
+
+
+def read_score_threshold(conn) -> tuple[bool, float]:
+    body = score_threshold_payload(app_settings_row(conn))
+    return bool(body["scoreThresholdEnabled"]), float(body["scoreThreshold"])
+
+
+def save_score_threshold(conn, *, enabled: bool, threshold: float) -> dict[str, Any]:
+    conn.execute(
+        """
+        update app_settings
+        set score_threshold_enabled = %s, score_threshold = %s
+        where id = 1
+        """,
+        (enabled, threshold),
+    )
     return app_settings_row(conn)
 
 
