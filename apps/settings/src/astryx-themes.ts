@@ -19,8 +19,8 @@ export const localRagTheme = defineTheme({
     "--radius-page": "12px",
     "--size-element-md": "28px",
     "--size-element-sm": "24px",
-    "--font-family-body": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", ui-sans-serif, sans-serif',
-    "--font-family-heading": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", ui-sans-serif, sans-serif',
+    "--font-family-body": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", system-ui, sans-serif',
+    "--font-family-heading": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", system-ui, sans-serif',
   },
 });
 

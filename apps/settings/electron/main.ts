@@ -50,8 +50,10 @@ ipcMain.handle("localrag:open-path", async (_event, raw: unknown) => {
 
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 960,
-    height: 720,
+    width: 1280,
+    height: 800,
+    minWidth: 960,
+    minHeight: 600,
     webPreferences: {
       contextIsolation: true,
       sandbox: true,

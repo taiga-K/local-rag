@@ -58,10 +58,11 @@ export function App() {
 
   return (
     <div className="app">
+      <div className="body">
       <nav className="side" aria-label="local-rag">
         <div className="brand">local-rag</div>
-        <button className={screen.kind === "overview" ? "nav-row is-selected" : "nav-row"} type="button" onClick={() => setScreen({ kind: "overview" })}>
-          <Icon name="home" size={18} />
+        <button className={screen.kind === "overview" ? "nav-row is-selected" : "nav-row"} type="button" data-measure="nav-row" onClick={() => setScreen({ kind: "overview" })}>
+          <Icon name="home" size={16} />
           <span className="t">概要</span>
         </button>
         <div className="cap">取り込むフォルダ</div>
@@ -72,7 +73,7 @@ export function App() {
             type="button"
             onClick={() => setScreen({ kind: "folder", id: item.id })}
           >
-            <Icon name="folder" size={18} />
+            <Icon name="folder" size={16} />
             <span className="t">{item.name}</span>
             {item.failed > 0 ? (
               <span className="meta num"><Icon name="err" size={12} />{item.failed}件失敗</span>
@@ -82,7 +83,7 @@ export function App() {
           </button>
         ))}
         <button className="nav-row" type="button" onClick={() => setAdding((open) => !open)}>
-          <Icon name="plus" size={18} />
+          <Icon name="plus" size={16} />
           <span className="t">フォルダを追加</span>
         </button>
         {adding ? (
@@ -107,14 +108,25 @@ export function App() {
         ) : null}
         <div className="spacer" />
         <button ref={settingsButton} className="nav-row" type="button" onClick={() => setSettingsOpen(true)}>
-          <Icon name="gear" size={18} />
+          <Icon name="gear" size={16} />
           <span className="t">設定</span>
         </button>
       </nav>
-      <main className="main">
+      <main className="main" data-measure="main">
         {error ? <p className="error-line">{error}</p> : null}
         {summary ? <ScreenBody screen={screen} summary={summary} folder={folder} local={local} activity={activity.events} showAll={showAll} onShowAll={() => setShowAll(true)} onReload={refresh} /> : null}
       </main>
+      </div>
+      {summary ? (
+        <StatusBar
+          summary={summary}
+          onOverview={() => setScreen({ kind: "overview" })}
+          onFailures={() => {
+            setScreen({ kind: "overview" });
+            window.setTimeout(() => document.getElementById("failed-files")?.scrollIntoView({ block: "start" }), 0);
+          }}
+        />
+      ) : null}
       {settingsOpen ? (
         <SettingsDialog
           onClose={() => {
@@ -122,6 +134,36 @@ export function App() {
             settingsButton.current?.focus();
           }}
         />
+      ) : null}
+    </div>
+  );
+}
+
+function StatusBar({
+  summary,
+  onOverview,
+  onFailures,
+}: {
+  summary: Summary;
+  onOverview: () => void;
+  onFailures: () => void;
+}) {
+  const remaining = Math.max(summary.total - summary.done, 0);
+  const working = !summary.pause.active && (summary.active > 0 || summary.queued > 0);
+  const ratio = summary.total === 0 ? 0 : summary.done / summary.total;
+  return (
+    <div className="statusbar" data-measure="statusbar">
+      <button type="button" onClick={onOverview}>
+        {working ? <span className="spinner" /> : summary.pause.active ? <Icon name="pause" size={14} /> : <Icon name="check" size={14} />}
+        <span className="num">{remaining > 0 ? `残り${remaining}件` : "すべて取り込み済み"}</span>
+        {working ? <span className="mini-bar" aria-hidden="true"><i style={{ width: `${Math.round(ratio * 100)}%` }} /></span> : null}
+      </button>
+      {summary.failed > 0 ? (
+        <button type="button" className="fail-bit" onClick={onFailures}>
+          <span aria-hidden="true">・</span>
+          <Icon name="err" size={12} />
+          <span className="num">{summary.failed}件を取り込めませんでした</span>
+        </button>
       ) : null}
     </div>
   );

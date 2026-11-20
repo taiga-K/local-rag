@@ -43,14 +43,20 @@ export function showsAdminControls(): false {
   return false;
 }
 
-const NO_STORED_FAILURE = "原因が記録されていません。再試行しても失敗する場合はファイルを開けるか確かめてください。";
+const QDRANT_UNAVAILABLE = "検索用のデータベースに接続できませんでした。local-rag を起動し直してから、再試行してください。";
+const NO_STORED_FAILURE = "このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。";
+const LEGACY_NO_STORED = "原因が記録されていません。再試行しても失敗する場合はファイルを開けるか確かめてください。";
 
 export function failureLine(classified: boolean, message: string | null): string {
   const text = (message ?? "").trim();
-  if (classified && text && text !== "INDEX_FAILED") {
-    return text;
+  if (text === "QDRANT_UNAVAILABLE") {
+    return QDRANT_UNAVAILABLE;
   }
-  return NO_STORED_FAILURE;
+  if (!classified || !text || text === "INDEX_FAILED" || text === LEGACY_NO_STORED) {
+    return NO_STORED_FAILURE;
+  }
+  const chars = Array.from(text);
+  return chars.length <= 160 ? text : chars.slice(0, 160).join("");
 }
 
 export function statusLabel(status: string): string {
@@ -60,7 +66,7 @@ export function statusLabel(status: string): string {
     case "IN_PROGRESS":
       return "取り込み中";
     case "QUEUED":
-      return "取り込み待ち";
+      return "待ち";
     case "FAILED":
       return "失敗";
     case "EMPTY":
@@ -72,6 +78,36 @@ export function statusLabel(status: string): string {
     default:
       return "分類できない状態";
   }
+}
+
+export function resultLabel(status: string): string {
+  switch (status) {
+    case "COMPLETED":
+    case "EMPTY":
+      return "取り込み済み";
+    case "IN_PROGRESS":
+      return "取り込み中";
+    case "FAILED":
+      return "失敗";
+    case "QUEUED":
+      return "待ち";
+    default:
+      return statusLabel(status);
+  }
+}
+
+export function folderCountItems(folder: {
+  completed: number;
+  active: number;
+  failed: number;
+  queued: number;
+}): { key: string; label: string; count: number }[] {
+  return [
+    { key: "completed", label: "取り込み済み", count: folder.completed },
+    { key: "queued", label: "待ち", count: folder.queued },
+    { key: "active", label: "取り込み中", count: folder.active },
+    { key: "failed", label: "失敗", count: folder.failed },
+  ];
 }
 
 export function folderSentence(folder: {

@@ -30,6 +30,39 @@ def _record(kb: str, name: str, status: str, reason: str | None, index: int) -> 
     }
 
 
+REAL_NAMES = [
+    "2026-09 定例議事録.docx",
+    "2026-08 定例議事録.docx",
+    "営業週報_2026-09-12.docx",
+    "顧客打合せ_B社_0918.docx",
+    "API仕様 v2.docx",
+    "導入手順_社内ポータル.pdf",
+    "問い合わせ対応_2026-09.md",
+    "採用面談メモ_新卒_09.docx",
+    "予算資料_第2四半期.pdf",
+    "振り返り_8月.md",
+    "契約書ドラフト_2026-09.pdf",
+    "リリースノート_1.4.md",
+    "障害報告_2026-09-03.docx",
+    "研修資料_情報セキュリティ.pdf",
+    "出張報告_大阪_0915.docx",
+    "製品要望_一覧_2026-09.xlsx",
+    "週次1on1_メモ.docx",
+    "利用規約_改定案.pdf",
+    "サポート手順_初回対応.md",
+    "会議アジェンダ_2026-09-26.docx",
+]
+
+
+def _realistic(index: int) -> str:
+    base = REAL_NAMES[index % len(REAL_NAMES)]
+    stem, ext = base.rsplit(".", 1)
+    cycle = index // len(REAL_NAMES)
+    if cycle == 0:
+        return base
+    return f"{stem}_{cycle + 1}.{ext}"
+
+
 def _seed() -> dict:
     named = [
         "2026-11 定例議事録.pdf",
@@ -42,13 +75,14 @@ def _seed() -> dict:
     for index, name in enumerate(named):
         notes.append(_record("notes", name, "COMPLETED", None, 1000 + index))
     for index in range(125):
-        notes.append(_record("notes", f"取り込み済み {index + 1}.docx", "COMPLETED", None, 2000 + index))
+        notes.append(_record("notes", _realistic(index), "COMPLETED", None, 2000 + index))
     notes.append(_record("notes", "2026-11 営業会議 議事録.docx", "IN_PROGRESS", None, 10))
     notes.append(_record("notes", "2026年度 予算申請書.pdf", "FAILED", "QDRANT_UNAVAILABLE", 11))
     notes.append(_record("notes", "定例メモ 10月.one", "FAILED", "INDEX_FAILED", 12))
-    for index in range(347):
-        notes.append(_record("notes", f"待ち {index + 1}.docx", "QUEUED", None, 3000 + index))
-    specs = [_record("specs", f"仕様 {index + 1}.md", "COMPLETED", None, 4000 + index) for index in range(4)]
+    notes.append(_record("notes", "顧客打合せ_A社_0827.docx", "FAILED", "TimeoutError: read timed out", 13))
+    for index in range(346):
+        notes.append(_record("notes", _realistic(index + 20), "QUEUED", None, 3000 + index))
+    specs = [_record("specs", f"仕様書_{index + 1}.md", "COMPLETED", None, 4000 + index) for index in range(4)]
     return {
         "local": {"folders": ["/tmp/local-rag-demo/議事録"], "includeSubfolders": True, "autoIndex": True},
         "retrieve": {"scoreThresholdEnabled": False, "scoreThreshold": 0.84},
@@ -203,18 +237,36 @@ class Handler(BaseHTTPRequestHandler):
                     for row in rows:
                         if row["indexingStatus"] in {"QUEUED"}:
                             continue
-                        events.append((row["updatedAt"], STATE["folders"][kb_id], activity_sentence(row["recordName"], row["indexingStatus"])))
+                        events.append((
+                            row["updatedAt"],
+                            STATE["folders"][kb_id],
+                            row["recordName"],
+                            row["indexingStatus"],
+                            activity_sentence(row["recordName"], row["indexingStatus"]),
+                        ))
                 events.sort(reverse=True)
                 limit = 50 if "limit=50" in self.path else 8
                 self._send(200, {
                     "hasMore": len(events) > limit,
-                    "events": [{"at": at, "folder": folder, "text": text} for at, folder, text in events[:limit]],
+                    "events": [
+                        {"at": at, "folder": folder, "name": name, "status": status, "text": text}
+                        for at, folder, name, status, text in events[:limit]
+                    ],
                 })
                 return
             if path.startswith("/api/v1/kb/") and path.endswith("/records"):
                 kb_id = path.split("/")[4]
                 rows = STATE["records"].get(kb_id, [])
-                ordered = sorted(rows, key=lambda row: (row["indexingStatus"] != "FAILED", row["indexingStatus"] != "IN_PROGRESS", row["updatedAt"]), reverse=False)
+                ordered = sorted(
+                    rows,
+                    key=lambda row: (
+                        row["indexingStatus"] == "FAILED",
+                        row["indexingStatus"] == "IN_PROGRESS",
+                        row["updatedAt"] or "",
+                        row["recordId"],
+                    ),
+                    reverse=True,
+                )
                 query = self.path.split("?", 1)[1] if "?" in self.path else ""
                 params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
                 limit = int(params.get("limit", "200") or 200)
@@ -268,6 +320,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         with LOCK:
+            if path == "/__demo/settled":
+                for rows in STATE["records"].values():
+                    for row in rows:
+                        if row["indexingStatus"] in {"QUEUED", "IN_PROGRESS"}:
+                            row["indexingStatus"] = "COMPLETED"
+                STATE["pause"] = {"kind": None, "until": None}
+                STATE["advance"] = False
+                self._send(200, {"ok": True})
+                return
             if path == "/__demo/idle":
                 for rows in STATE["records"].values():
                     for row in rows:

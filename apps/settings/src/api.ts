@@ -46,7 +46,7 @@ export type Summary = {
 
 export type Activity = {
   hasMore: boolean;
-  events: { at: string | null; folder: string; text: string }[];
+  events: { at: string | null; folder: string; text: string; name?: string; status?: string }[];
 };
 
 export type EmbeddingInfo = {

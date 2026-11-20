@@ -8,9 +8,9 @@ import {
   type RecordRow,
   type Summary,
 } from "./api";
-import { clock, longStamp } from "./format";
+import { clock } from "./format";
 import { Icon } from "./icons";
-import { failureLine } from "./view";
+import { failureLine, resultLabel } from "./view";
 
 type Failed = RecordRow & { kbId: string; kbName: string };
 type Phase = "working" | "done";
@@ -30,7 +30,7 @@ export function Overview({
   showAll,
 }: {
   summary: Summary;
-  activity: { at: string | null; folder: string; text: string }[];
+  activity: { at: string | null; folder: string; text: string; name?: string; status?: string }[];
   onReload: () => Promise<void>;
   onShowAll: () => void;
   showAll: boolean;
@@ -45,7 +45,6 @@ export function Overview({
   const menuButton = useRef<HTMLButtonElement>(null);
   const lastSwap = useRef(0);
   const importing = !summary.pause.active && (summary.active > 0 || summary.queued > 0);
-  const idle = !summary.pause.active && !importing;
   const ratio = summary.total === 0 ? 0 : summary.done / summary.total;
 
   const foldersRef = useRef(summary.folders);
@@ -126,7 +125,6 @@ export function Overview({
     ...failed.filter((row) => phase[row.recordId] === undefined),
     ...Object.keys(phase).map((id) => held[id] ?? failed.find((row) => row.recordId === id)).filter((row): row is Failed => row !== undefined),
   ];
-  const headline = headlineOf(summary);
   async function pause(kind: string | null) {
     setMenu(false);
     menuButton.current?.focus();
@@ -158,14 +156,17 @@ export function Overview({
 
   return (
     <div className="col">
+      <h1 className="page-title" data-measure="page-title">概要</h1>
       <div className="status" role="status" aria-live="polite">
-        <div>
-          <h1 className="page-title">
-            {headline.title}
-            {headline.rest ? <span className="rest num">{`　${headline.rest}`}</span> : null}
-          </h1>
-          {idle && summary.total > 0 ? <div className="sub num">{headline.caption}</div> : null}
-        </div>
+        <div className="state-line">
+          <div>
+            <span className="state-name" data-measure="state-name">{stateName(summary, importing)}</span>
+            {summary.total > 0 ? (
+              <span className="state-count num" data-measure="state-count">
+                {importing || summary.pause.active ? `${summary.total}件中${summary.done}件` : `${summary.total}件`}
+              </span>
+            ) : null}
+          </div>
         {importing || summary.pause.active ? (
           <div className="menu-wrap">
             <button
@@ -202,30 +203,33 @@ export function Overview({
         ) : (
           <button className="quiet" type="button" onClick={() => void onReload()}>今すぐ確認</button>
         )}
+        </div>
       </div>
-      {importing ? (
-        <>
-          <div
-            className="bar"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuenow={summary.done}
-            aria-valuemax={summary.total}
-            aria-valuetext={`${summary.done} / ${summary.total} 件`}
-          >
-            <i className="progress__fill" style={{ transform: `scaleX(${ratio})` }} />
-          </div>
-          {fileShown ? (
-            <div className={fileDim ? "current-file is-swapping" : "current-file"}>
-              いま読んでいるファイル：{fileShown}（{summary.current?.kbName}）
-            </div>
-          ) : null}
-        </>
+      {importing || summary.pause.active ? (
+        <div
+          className={summary.pause.active ? "bar is-paused" : "bar"}
+          data-measure="progress"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuenow={summary.done}
+          aria-valuemax={summary.total}
+          aria-valuetext={`${summary.done} / ${summary.total}`}
+        >
+          <i className="progress__fill" style={{ transform: `scaleX(${ratio})` }} />
+        </div>
+      ) : null}
+      {importing && fileShown ? (
+        <div className={fileDim ? "current-file is-swapping" : "current-file"}>
+          読み込み中: {fileShown}
+        </div>
       ) : null}
       {visible.length > 0 ? (
-        <section className="section">
+        <section className="section" id="failed-files">
           <div className="sec-head">
-            <h2>取り込めなかったファイル <span className="count num">{visible.length}件</span></h2>
+            <div className="sec-title">
+              <h2 data-measure="section-title">取り込めなかったファイル</h2>
+              <span className="count num">{visible.length}件</span>
+            </div>
             <button
               className="quiet"
               type="button"
@@ -289,7 +293,11 @@ export function Overview({
           {activity.map((event, index) => (
             <div className="log" key={`${event.at}-${index}`}>
               <time className="num" dateTime={event.at ?? undefined}>{clock(event.at)}</time>
-              <span>{event.text}</span>
+              <span className="name">{event.name || event.text}</span>
+              <span className={event.status === "FAILED" ? "result is-failed" : "result"}>
+                {event.status === "FAILED" ? <Icon name="err" size={12} /> : null}
+                {event.status ? resultLabel(event.status) : ""}
+              </span>
               <span className="folder">{event.folder}</span>
             </div>
           ))}
@@ -334,7 +342,7 @@ function FailRow({
         </span>
         <div>
           <div className="fail-name">{row.recordName}</div>
-          <div className="fail-why">{sentence}</div>
+          <div className="fail-why" data-measure="fail-why">{sentence}</div>
           <div className="fail-path">{row.kbName}</div>
         </div>
         <button className="quiet" type="button" disabled={phase === "working"} onClick={onRetry}>
@@ -345,26 +353,17 @@ function FailRow({
   );
 }
 
-function headlineOf(summary: Summary): { title: string; rest: string; caption: string } {
-  const counts = `${summary.done} / ${summary.total} 件`;
+function stateName(summary: Summary, importing: boolean): string {
   if (summary.total === 0 && !summary.pause.active) {
-    return { title: "取り込むファイルはありません", rest: "", caption: "" };
+    return "取り込むファイルはありません";
   }
   if (summary.pause.active) {
-    const when = summary.pause.until ? `${longStamp(summary.pause.until)} に再開` : "再開するまで停止しています";
-    return { title: "一時停止中です", rest: `${counts}　${when}`, caption: "" };
+    return "一時停止中";
   }
-  if (summary.active > 0 || summary.queued > 0) {
-    return { title: "取り込み中です", rest: counts, caption: "" };
+  if (importing) {
+    return "取り込み中";
   }
-  if (summary.failed > 0 || (summary.held ?? 0) > 0) {
-    return { title: "取り込みが終わっていません", rest: counts, caption: "" };
-  }
-  return {
-    title: "すべて取り込み済みです",
-    rest: "",
-    caption: `${summary.total}件${summary.latestAt ? `　${longStamp(summary.latestAt)} 時点` : ""}`,
-  };
+  return "すべて取り込み済み";
 }
 
 function nextLocalMidnight(): string {

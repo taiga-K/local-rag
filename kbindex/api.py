@@ -908,6 +908,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     {
                         "at": _iso_z(row["updated_at"]),
                         "folder": row["kb_name"],
+                        "name": row["record_name"],
+                        "status": row["indexing_status"],
                         "text": activity_sentence(row["record_name"], row["indexing_status"]),
                     }
                     for row in shown
