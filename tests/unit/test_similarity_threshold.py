@@ -36,8 +36,8 @@ def test_threshold_keeps_the_boundary_and_rrf_order():
 
 
 def test_default_threshold_is_the_single_constant():
-    assert DEFAULT_SCORE_THRESHOLD == 0.5
-    assert "0.5" not in "\n".join(ALTERS)
+    assert DEFAULT_SCORE_THRESHOLD == 0.84
+    assert "0.84" not in "\n".join(ALTERS)
 
 
 def test_null_column_follows_the_constant(monkeypatch):
@@ -259,7 +259,7 @@ def test_retrieve_settings_round_trip_and_local_body_stays_put():
     with _settings_client(row) as client:
         got = client.get("/api/v1/settings/retrieve")
         assert got.status_code == 200
-        assert got.json() == {"scoreThresholdEnabled": False, "scoreThreshold": 0.5}
+        assert got.json() == {"scoreThresholdEnabled": False, "scoreThreshold": 0.84}
         local = client.get("/api/v1/settings/local")
         assert local.json() == {"folders": ["/data/notes"], "includeSubfolders": True, "autoIndex": True}
         saved = client.put(

@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 
-DEFAULT_SCORE_THRESHOLD = 0.5
+DEFAULT_SCORE_THRESHOLD = 0.84
 
 
 def cosine(query: Sequence[float], stored: Sequence[float]) -> float | None:
