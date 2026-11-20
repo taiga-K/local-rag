@@ -1,0 +1,76 @@
+/* local-rag settings app — motion reference (not a mock; copy into the real app's styles)
+   Timing tokens. Every start time is computed from --delay. */
+:root{
+  --delay: 0s;
+  --ease-decel: cubic-bezier(0, 0, 0.1, 1);        /* シュッ (karory slideIn) */
+  --ease-firm: cubic-bezier(0.83, 0, 0.17, 1);      /* カチッ easeInOutQuint 【本人値】 */
+  --t-fade: 0.15s;   /* opacity 0.15–0.3s linear 【本人値】comimi */
+  --t-state: 0.2s;   /* UI state 0.14–0.4s 【本人値】comimi */
+  --t-move: 0.3s;    /* 1要素の移動 0.18–0.40s 【実測】 */
+  --t-progress: 0.4s;
+  --t-hold: 0.8s;    /* 次の動きまでの間 中央値0.80s 【実測】 */
+}
+
+/* 1. progress bar: fill advances */
+.progress__fill{transform-origin:left center;transition:transform var(--t-progress) var(--ease-decel)}
+
+/* 2. current file name swap */
+.current-file{transition:opacity var(--t-fade) linear}
+.current-file.is-swapping{opacity:0}
+
+/* 3. pause menu */
+.menu{opacity:0;translate:0 -4px;transition:opacity var(--t-fade) linear,translate var(--t-state) var(--ease-decel);pointer-events:none}
+.menu[data-open="true"]{opacity:1;translate:0 0;pointer-events:auto}
+
+/* 4. retry: working → done → collapse */
+.fail-row{display:grid;grid-template-rows:1fr;transition:grid-template-rows var(--t-move) var(--ease-firm) calc(var(--delay) + var(--t-hold)),opacity var(--t-fade) linear calc(var(--delay) + var(--t-hold))}
+.fail-row > .fail-row__inner{overflow:hidden;min-height:0}
+.fail-row[data-state="done"]{grid-template-rows:0fr;opacity:0}
+.fail-row__status{transition:opacity var(--t-fade) linear}
+.spinner{animation:spin 0.8s linear infinite}
+@keyframes spin{to{rotate:360deg}}
+@keyframes dim{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* 5. toggle switch */
+.switch__track{transition:background-color var(--t-state) linear}
+.switch__thumb{transition:translate var(--t-state) var(--ease-decel)}
+.switch[aria-checked="true"] .switch__thumb{translate:12px 0}
+.threshold-field{transition:opacity var(--t-fade) linear}
+
+/* 6. impact notice reveal */
+.notice{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t-move) var(--ease-decel)}
+.notice > .notice__inner{overflow:hidden;min-height:0;opacity:0;transition:opacity var(--t-state) linear}
+.notice[data-open="true"]{grid-template-rows:1fr}
+.notice[data-open="true"] > .notice__inner{opacity:1;transition-delay:calc(var(--delay) + 0.1s)}
+
+/* 7. sidebar hover / selection */
+@media (hover: hover){
+  .nav-row{transition:background-color 0.12s linear}
+  .nav-row:hover{background-color:var(--nr-hover)}
+}
+
+/* 8. folder failure count swap */
+.nav-row__meta{transition:opacity var(--t-fade) linear}
+.nav-row__meta.is-swapping{opacity:0}
+
+/* 9. settings modal */
+.modal,.modal-backdrop{opacity:0;transition:opacity var(--t-state) linear}
+.modal{scale:0.98;transition:opacity var(--t-state) linear,scale var(--t-state) var(--ease-decel)}
+.modal[data-open="true"],.modal-backdrop[data-open="true"]{opacity:1;scale:1}
+
+@media (prefers-reduced-motion: reduce){
+  :root{--delay:0s;--t-hold:0s}
+  .progress__fill{transition:none}
+  .menu{translate:0 0;transition:opacity var(--t-fade) linear}
+  .menu[data-open="true"]{translate:0 0}
+  .fail-row{transition:opacity var(--t-fade) linear 0s}
+  .fail-row[data-state="done"]{grid-template-rows:0fr;opacity:0}
+  .spinner{animation:dim 1.2s ease-in-out infinite;rotate:0deg}
+  .switch__thumb{transition:none}
+  .switch[aria-checked="true"] .switch__thumb{transition:none}
+  .notice{transition:none}
+  .notice[data-open="true"]{grid-template-rows:1fr}
+  .notice[data-open="true"] > .notice__inner{opacity:1;transition-delay:0s}
+  .modal{scale:1;transition:opacity var(--t-state) linear}
+  .modal[data-open="true"]{scale:1}
+}

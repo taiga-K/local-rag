@@ -5,6 +5,12 @@ import { themes, defaultThemeSlug } from "./astryx-themes";
 import { App } from "./App";
 import "@astryxdesign/core/reset.css";
 import "@astryxdesign/core/astryx.css";
+import "./motion.css";
+import "./shell.css";
+
+const storedTheme = window.localStorage.getItem("local-rag-theme");
+const themeMode = storedTheme === "dark" || storedTheme === "light" || storedTheme === "system" ? storedTheme : "system";
+document.documentElement.dataset.theme = themeMode;
 
 const root = document.getElementById("root");
 if (!root) {
@@ -12,7 +18,7 @@ if (!root) {
 }
 createRoot(root).render(
   <StrictMode>
-    <Theme theme={themes[defaultThemeSlug]}>
+    <Theme theme={themes[defaultThemeSlug]} mode={themeMode}>
       <App />
     </Theme>
   </StrictMode>,

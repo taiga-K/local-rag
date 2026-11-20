@@ -224,7 +224,7 @@ class Engine:
             self._fail(rid, event_version, event_rev, "QDRANT_UNAVAILABLE")
             return "FAILED"
         except Exception as exc:
-            self._fail(rid, event_version, event_rev, type(exc).__name__[:200])
+            self._fail(rid, event_version, event_rev, _stored_error(exc))
             return "FAILED"
 
     def _finish_empty(self, rid, event_version: int, event_rev: str) -> str:
@@ -479,6 +479,13 @@ class Engine:
             scores[row["chunk_id"]] = scores.get(row["chunk_id"], 0.0) + float(row["tf"]) * idf
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return [(chunk_id, score) for chunk_id, score in ranked if score > 0][:limit]
+
+
+def _stored_error(exc: BaseException) -> str:
+    """Keep the exception text the process already has. Do not classify it."""
+    detail = " ".join(str(exc).split())
+    text = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+    return text[:200]
 
 
 def parent_of(payload: dict, index: int) -> int | None:

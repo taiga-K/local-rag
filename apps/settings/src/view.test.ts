@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCREENS, SettingsSaver, autoIndexCopy, commitSettingsChange, countRows, foldersText, parseFolders, showsAdminControls } from "./view";
+import { SCREENS, SettingsSaver, autoIndexCopy, commitSettingsChange, countRows, failureLine, folderSentence, foldersText, parseFolders, showsAdminControls, statusLabel, visibleRecords } from "./view";
 
 describe("settings view", () => {
   it("keeps unique folder paths and drops blanks", () => {
@@ -22,7 +22,7 @@ describe("settings view", () => {
 
   it("does not offer admin screens", () => {
     expect(showsAdminControls()).toBe(false);
-    expect(SCREENS.map((screen) => screen.id)).toEqual(["folders", "index", "status"]);
+    expect(SCREENS.map((screen) => screen.id)).toEqual(["overview", "settings"]);
   });
 
   it("keeps the previous flags when a toggle save fails, so a retry writes the same change", async () => {
@@ -97,5 +97,23 @@ describe("settings view", () => {
     expect(result.folders).toBeUndefined();
     expect(result.includeSubfolders).toBeUndefined();
     expect(result.message).toBe("down");
+  });
+
+  it("does not invent a failure sentence", () => {
+    expect(failureLine(true, "QDRANT_UNAVAILABLE")).toBe("QDRANT_UNAVAILABLE");
+    expect(failureLine(false, null)).toContain("原因が記録されていません");
+    expect(statusLabel("FAILED")).toBe("失敗");
+    expect(statusLabel("UNKNOWN")).toBe("分類できない状態");
+  });
+
+  it("counts a folder from its own numbers and filters the table", () => {
+    expect(folderSentence({ total: 4, completed: 4, active: 0, failed: 0, queued: 0 })).toBe("4件を取り込み済みです。");
+    expect(folderSentence({ total: 4, completed: 1, active: 1, failed: 1, queued: 1 })).toContain("1件は取り込み待ち");
+    const rows = [
+      { recordName: "議事録", indexingStatus: "COMPLETED" },
+      { recordName: "予算", indexingStatus: "FAILED" },
+    ];
+    expect(visibleRecords(rows, "予算", false).map((row) => row.recordName)).toEqual(["予算"]);
+    expect(visibleRecords(rows, "", true)).toEqual([rows[1]]);
   });
 });

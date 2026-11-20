@@ -152,12 +152,18 @@ ALTERS = (
       max_upload_bytes bigint not null default 16777216,
       requested_model text,
       score_threshold_enabled boolean not null default false,
-      score_threshold double precision
+      score_threshold double precision,
+      pause_until timestamptz,
+      pause_kind text,
+      requested_device text
     )
     """,
     "insert into app_settings (id) values (1) on conflict (id) do nothing",
     "alter table app_settings add column if not exists score_threshold_enabled boolean not null default false",
     "alter table app_settings add column if not exists score_threshold double precision",
+    "alter table app_settings add column if not exists pause_until timestamptz",
+    "alter table app_settings add column if not exists pause_kind text",
+    "alter table app_settings add column if not exists requested_device text",
     "alter table records add column if not exists has_indexed_copy boolean not null default false",
     "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
@@ -468,20 +474,142 @@ def save_score_threshold(conn, *, enabled: bool, threshold: float) -> dict[str, 
     return app_settings_row(conn)
 
 
+def save_pause(conn, *, kind: str | None, until) -> dict[str, Any]:
+    conn.execute(
+        "update app_settings set pause_kind = %s, pause_until = %s where id = 1",
+        (kind, until),
+    )
+    return app_settings_row(conn)
+
+
+def save_requested_device(conn, device: str) -> dict[str, Any]:
+    conn.execute("update app_settings set requested_device = %s where id = 1", (device,))
+    return app_settings_row(conn)
+
+
 def list_kbs(conn) -> list[dict[str, Any]]:
     return list(conn.execute("select id, name from knowledge_bases order by id").fetchall())
 
 
-def list_record_status(conn, kb_id: str, limit: int = 100) -> list[dict[str, Any]]:
+def list_record_status(
+    conn,
+    kb_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    where = "where kb_id = %s"
+    params: list[Any] = [kb_id]
+    if status is not None:
+        where += " and indexing_status = %s"
+        params.append(status)
+    params.extend([limit, offset])
+    return list(
+        conn.execute(
+            f"""
+            select record_id, external_record_id, record_name, indexing_status, failure_reason, version,
+                   source_modified_ms, updated_at
+            from records {where}
+            order by (indexing_status = 'FAILED') desc,
+                     (indexing_status = 'IN_PROGRESS') desc,
+                     updated_at desc,
+                     record_id
+            limit %s offset %s
+            """,
+            params,
+        ).fetchall()
+    )
+
+
+def list_external_ids(conn, kb_id: str) -> list[str]:
+    rows = conn.execute(
+        "select external_record_id from records where kb_id = %s order by external_record_id",
+        (kb_id,),
+    ).fetchall()
+    return [row["external_record_id"] for row in rows]
+
+
+def ingest_folder_counts(conn) -> list[dict[str, Any]]:
     return list(
         conn.execute(
             """
-            select record_id, external_record_id, record_name, indexing_status, failure_reason, version
-            from records where kb_id = %s
-            order by updated_at desc
+            select r.kb_id, k.name,
+                   count(*) as total,
+                   count(*) filter (where r.indexing_status = 'FAILED') as failed,
+                   count(*) filter (where r.indexing_status = 'IN_PROGRESS') as active,
+                   count(*) filter (where r.indexing_status = 'QUEUED') as queued,
+                   count(*) filter (where r.indexing_status = 'COMPLETED') as completed,
+                   count(*) filter (where r.indexing_status = 'EMPTY') as empty,
+                   count(*) filter (where r.indexing_status = 'AUTO_INDEX_OFF') as held,
+                   count(*) filter (where r.indexing_status in ('COMPLETED', 'EMPTY')) as done
+            from records r
+            join knowledge_bases k on k.id = r.kb_id
+            group by r.kb_id, k.name
+            order by k.name
+            """
+        ).fetchall()
+    )
+
+
+def current_ingest_record(conn) -> dict[str, Any] | None:
+    return conn.execute(
+        """
+        select r.record_name, r.kb_id, k.name as kb_name
+        from records r
+        join knowledge_bases k on k.id = r.kb_id
+        where r.indexing_status = 'IN_PROGRESS'
+        order by r.updated_at desc
+        limit 1
+        """
+    ).fetchone()
+
+
+def latest_record_update(conn):
+    return conn.execute("select max(updated_at) as updated_at from records").fetchone()
+
+
+def recent_record_events(conn, limit: int) -> list[dict[str, Any]]:
+    return list(
+        conn.execute(
+            """
+            select r.record_name, r.indexing_status, r.updated_at, k.name as kb_name
+            from records r
+            join knowledge_bases k on k.id = r.kb_id
+            where r.indexing_status <> 'QUEUED'
+            order by r.updated_at desc
             limit %s
             """,
-            (kb_id, limit),
+            (limit,),
+        ).fetchall()
+    )
+
+
+def count_reindexable(conn) -> int:
+    row = conn.execute("select count(*) as n from records where indexing_status <> 'EMPTY'").fetchone()
+    return int(row["n"])
+
+
+def queue_failed_records(conn, kb_id: str | None) -> list[dict[str, Any]]:
+    if kb_id is None:
+        return list(
+            conn.execute(
+                """
+                update records
+                set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+                where indexing_status = 'FAILED'
+                returning record_id, kb_id, external_record_id, version, content_rev
+                """
+            ).fetchall()
+        )
+    return list(
+        conn.execute(
+            """
+            update records
+            set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+            where indexing_status = 'FAILED' and kb_id = %s
+            returning record_id, kb_id, external_record_id, version, content_rev
+            """,
+            (kb_id,),
         ).fetchall()
     )
 

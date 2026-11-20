@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.electron.json",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.electron.json && cp electron/preload.cjs dist-electron/preload.cjs",
     "test": "vitest run",
     "e2e": "playwright test",
     "pack:win": "npm run build && electron-builder --win zip"

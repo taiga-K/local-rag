@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from kbindex.config import Settings, load_settings, rebuild_enabled
+from kbindex.ingest_ui import activity_sentence, failure_fields, pause_deadline, pause_is_active, PAUSE_KINDS
 from kbindex.contract import (
     EXTERNAL_RECORD_ID,
     MAX_BODY_BYTES,
@@ -31,9 +32,18 @@ from kbindex.db import (
     app_settings_row,
     clear_postings,
     counts_for,
+    count_reindexable,
+    current_ingest_record,
+    ingest_folder_counts,
+    latest_record_update,
+    list_external_ids,
     list_kbs,
     list_record_status,
+    queue_failed_records,
     queue_kb_records,
+    recent_record_events,
+    save_pause,
+    save_requested_device,
     save_local_settings,
     save_requested_model,
     save_score_threshold,
@@ -134,6 +144,17 @@ class UploadLimitIn(BaseModel):
     maxBytes: int = Field(ge=1, le=MAX_BODY_BYTES)
 
 
+class DeviceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    device: str
+
+
+class PauseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    kind: str | None = None
+    until: str | None = None
+
+
 class RetrieveSettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     scoreThresholdEnabled: bool
@@ -148,6 +169,17 @@ class RetrieveSettingsIn(BaseModel):
         if not math.isfinite(number):
             raise ValueError("scoreThreshold must be finite")
         return number
+
+
+_RECORD_STATUSES = {
+    "NOT_STARTED",
+    "QUEUED",
+    "IN_PROGRESS",
+    "COMPLETED",
+    "FAILED",
+    "EMPTY",
+    "AUTO_INDEX_OFF",
+}
 
 
 class SchemaIn(BaseModel):
@@ -698,25 +730,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"knowledgeBases": [{"id": row["id"], "name": row["name"]} for row in rows]})
 
     @app.get("/api/v1/kb/{kb_id}/records")
-    def list_records(kb_id: str) -> JSONResponse:
+    def list_records(kb_id: str, limit: int = 100, offset: int = 0, status: str | None = None) -> JSONResponse:
         _require_kb(app, kb_id)
+        if status is not None and status not in _RECORD_STATUSES:
+            raise PushRefusal(400, "ENVELOPE_INVALID", "status is not a record status.")
+        cap = 100 if isinstance(limit, bool) or not isinstance(limit, int) else min(max(limit, 1), 200)
+        off = 0 if isinstance(offset, bool) or not isinstance(offset, int) else max(offset, 0)
         with app.state.db.connect() as conn:
-            rows = list_record_status(conn, kb_id)
-        return JSONResponse(
-            {
-                "records": [
-                    {
-                        "recordId": str(row["record_id"]),
-                        "externalRecordId": row["external_record_id"],
-                        "recordName": row["record_name"],
-                        "indexingStatus": row["indexing_status"],
-                        "failureReason": None if row["indexing_status"] in {"COMPLETED", "EMPTY"} else row["failure_reason"],
-                        "version": row["version"],
-                    }
-                    for row in rows
-                ]
-            }
-        )
+            rows = list_record_status(conn, kb_id, cap, off, status)
+        return JSONResponse({"records": [_record_public(row) for row in rows]})
 
     @app.get("/api/v1/settings/local")
     def get_local_settings() -> JSONResponse:
@@ -767,14 +789,142 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/engineer/embedding")
     def get_embedding() -> JSONResponse:
         with app.state.db.connect() as conn:
-            stored = app_settings_row(conn)["requested_model"]
+            row = app_settings_row(conn)
+        return JSONResponse(_embedding_body(app, row))
+
+    @app.put("/api/v1/engineer/device")
+    async def put_device(request: Request) -> JSONResponse:
+        try:
+            payload = DeviceIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The device body is invalid.") from None
+        if payload.device not in {"cpu", "cuda"}:
+            raise PushRefusal(400, "ENVELOPE_INVALID", "device must be cpu or cuda.")
+        with app.state.db.connect() as conn:
+            row = save_requested_device(conn, payload.device)
+            conn.commit()
+        body = _embedding_body(app, row)
+        body["restartRequired"] = True
+        return JSONResponse(body)
+
+    @app.get("/api/v1/ingest/summary")
+    def ingest_summary() -> JSONResponse:
+        _require_postgres(app)
+        now = datetime.now(timezone.utc)
+        with app.state.db.connect() as conn:
+            folders = ingest_folder_counts(conn)
+            current = current_ingest_record(conn)
+            latest = latest_record_update(conn)
+            settings = app_settings_row(conn)
+            reindex_count = count_reindexable(conn)
+        active = pause_is_active(settings.get("pause_kind"), settings.get("pause_until"), now)
         return JSONResponse(
             {
-                "model": app.state.settings.model,
-                "device": app.state.settings.device,
-                "requestedModel": stored,
+                "total": sum(int(row["total"]) for row in folders),
+                "done": sum(int(row["done"]) for row in folders),
+                "active": sum(int(row["active"]) for row in folders),
+                "queued": sum(int(row["queued"]) for row in folders),
+                "failed": sum(int(row["failed"]) for row in folders),
+                "held": sum(int(row["held"]) for row in folders),
+                "reindexCount": reindex_count,
+                "latestAt": _iso_z(None if latest is None else latest["updated_at"]),
+                "current": None
+                if current is None
+                else {"recordName": current["record_name"], "kbId": current["kb_id"], "kbName": current["kb_name"]},
+                "pause": {
+                    "active": active,
+                    "kind": settings.get("pause_kind"),
+                    "until": _iso_z(settings.get("pause_until")),
+                },
+                "folders": [
+                    {
+                        "id": row["kb_id"],
+                        "name": row["name"],
+                        "total": int(row["total"]),
+                        "failed": int(row["failed"]),
+                        "active": int(row["active"]),
+                        "queued": int(row["queued"]),
+                        "completed": int(row["completed"]),
+                        "empty": int(row["empty"]),
+                        "held": int(row["held"]),
+                    }
+                    for row in folders
+                ],
             }
         )
+
+    @app.put("/api/v1/ingest/pause")
+    async def put_pause(request: Request) -> JSONResponse:
+        try:
+            payload = PauseIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The pause body is invalid.") from None
+        if payload.kind is not None and payload.kind not in PAUSE_KINDS:
+            raise PushRefusal(400, "ENVELOPE_INVALID", "pause kind is invalid.")
+        now = datetime.now(timezone.utc)
+        if payload.kind == "tomorrow":
+            if not payload.until:
+                raise PushRefusal(400, "ENVELOPE_INVALID", "tomorrow needs a local until timestamp.")
+            try:
+                until = datetime.fromisoformat(payload.until.replace("Z", "+00:00"))
+            except ValueError:
+                raise PushRefusal(400, "ENVELOPE_INVALID", "until is not a timestamp.") from None
+            if until.tzinfo is None:
+                raise PushRefusal(400, "ENVELOPE_INVALID", "until needs an offset.")
+        else:
+            until = None if payload.kind is None else pause_deadline(payload.kind, now)
+        with app.state.db.connect() as conn:
+            row = save_pause(conn, kind=payload.kind, until=until)
+            conn.commit()
+        return JSONResponse(
+            {
+                "active": pause_is_active(row.get("pause_kind"), row.get("pause_until"), now),
+                "kind": row.get("pause_kind"),
+                "until": _iso_z(row.get("pause_until")),
+            }
+        )
+
+    @app.post("/api/v1/ingest/retry-failed")
+    def retry_failed() -> JSONResponse:
+        _require_postgres(app)
+        _require_redis(app)
+        with app.state.db.connect() as conn:
+            rows = queue_failed_records(conn, None)
+            conn.commit()
+        _publish_reindex(app, rows)
+        return JSONResponse({"queued": len(rows)})
+
+    @app.get("/api/v1/ingest/activity")
+    def ingest_activity(limit: int = 8) -> JSONResponse:
+        _require_postgres(app)
+        cap = 8 if isinstance(limit, bool) or not isinstance(limit, int) else min(max(limit, 1), 50)
+        with app.state.db.connect() as conn:
+            rows = recent_record_events(conn, cap + 1)
+        shown = rows[:cap]
+        return JSONResponse(
+            {
+                "hasMore": len(rows) > cap,
+                "events": [
+                    {
+                        "at": _iso_z(row["updated_at"]),
+                        "folder": row["kb_name"],
+                        "text": activity_sentence(row["record_name"], row["indexing_status"]),
+                    }
+                    for row in shown
+                ],
+            }
+        )
+
+    @app.post("/api/v1/kb/{kb_id}/detach")
+    def detach_kb(kb_id: str) -> JSONResponse:
+        _require_kb(app, kb_id)
+        with app.state.db.connect() as conn:
+            ids = list_external_ids(conn, kb_id)
+        deleted = 0
+        for external_id in ids:
+            delete_record(kb_id, external_id)
+            deleted += 1
+        return JSONResponse({"deleted": deleted})
 
     @app.get("/api/v1/engineer/upload-limit")
     def get_upload_limit() -> JSONResponse:
@@ -1165,6 +1315,68 @@ def _pipeshub_record(row) -> dict:
         record["embedDone"] = status["embedDone"]
         record["embedTotal"] = status["embedTotal"]
     return {"record": record, "knowledgeBase": {"id": row["kb_id"]}}
+
+
+def _record_public(row) -> dict:
+    status = row["indexing_status"]
+    reason = None if status in {"COMPLETED", "EMPTY"} else row["failure_reason"]
+    fields = failure_fields(status, reason)
+    updated = row.get("source_modified_ms")
+    return {
+        "recordId": str(row["record_id"]),
+        "externalRecordId": row["external_record_id"],
+        "recordName": row["record_name"],
+        "indexingStatus": status,
+        "failureReason": reason,
+        "failureClassified": fields["failureClassified"],
+        "failureMessage": fields["failureMessage"],
+        "sourceModifiedMs": None if updated is None else int(updated),
+        "updatedAt": _iso_z(row.get("updated_at")),
+        "version": row["version"],
+    }
+
+
+def _point_count(app) -> int | None:
+    try:
+        return int(app.state.vectors.count())
+    except (QdrantUnavailable, AttributeError):
+        return None
+
+
+def _embedding_body(app, row) -> dict:
+    model = app.state.settings.model
+    models = [model]
+    requested = row.get("requested_model")
+    if isinstance(requested, str) and requested and requested not in models:
+        models.append(requested)
+    return {
+        "model": model,
+        "device": app.state.settings.device,
+        "requestedModel": requested,
+        "requestedDevice": row.get("requested_device"),
+        "keyword": "fastembed",
+        "dimension": int(app.state.embedder.dim),
+        "pointCount": _point_count(app),
+        "models": models,
+        "devices": ["cpu", "cuda"],
+    }
+
+
+def _publish_reindex(app, rows) -> None:
+    try:
+        for row in rows:
+            publish(
+                app.state.redis,
+                "reindexRecord",
+                record_id=str(row["record_id"]),
+                kb_id=row["kb_id"],
+                external_record_id=row["external_record_id"],
+                version=int(row["version"]),
+                content_rev=row["content_rev"] or "",
+                lanes=app.state.settings.redis_lanes,
+            )
+    except redis.RedisError:
+        raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
 
 
 def _local_body(row) -> dict:
