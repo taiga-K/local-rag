@@ -34,7 +34,7 @@ export function FolderScreen({
     return () => {
       stop = true;
     };
-  }, [folder]);
+  }, [folder.id]);
 
   const shown = visibleRecords(records, query, failedOnly);
   const openable = local ? configuredFolder(local.folders, folder.name) : null;

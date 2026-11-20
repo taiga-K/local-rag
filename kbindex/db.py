@@ -574,6 +574,7 @@ def recent_record_events(conn, limit: int) -> list[dict[str, Any]]:
             select r.record_name, r.indexing_status, r.updated_at, k.name as kb_name
             from records r
             join knowledge_bases k on k.id = r.kb_id
+            where r.indexing_status <> 'QUEUED'
             order by r.updated_at desc
             limit %s
             """,

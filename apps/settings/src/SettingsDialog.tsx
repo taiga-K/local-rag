@@ -33,6 +33,7 @@ export function SettingsDialog({
   const [open, setOpen] = useState(false);
   const [thresholdText, setThresholdText] = useState("0.84");
   const [otherModel, setOtherModel] = useState("");
+  const [nextDimension, setNextDimension] = useState("");
   const retrieveRef = useRef(retrieve);
   const textRef = useRef(thresholdText);
   const saveSeq = useRef(0);
@@ -110,11 +111,11 @@ export function SettingsDialog({
   }
 
   const points = embedding?.pointCount;
+  const typedDimension = Number(nextDimension);
+  const dimensionOk = Number.isInteger(typedDimension) && typedDimension >= 1;
   const modelNotice = points != null && points > 0
     ? "点が残っているあいだ、モデルは変えられません。"
-    : points === 0
-      ? "再起動すると、このモデルに切り替わります。"
-      : "点が残っていると変更は拒否されます。受け入れられたときは、再起動が必要です。";
+    : "新しいモデルの次元を入れてください。今のモデルの次元は使いません。再起動すると反映されます。";
 
   return (
     <>
@@ -139,9 +140,13 @@ export function SettingsDialog({
               <Switch
                 on={local.autoIndex}
                 onChange={(next) => {
+                  const previous = local;
                   const saved = { ...local, autoIndex: next };
                   setLocal(saved);
-                  void saveSettings(saved).catch((error: unknown) => setNote(error instanceof Error ? error.message : "保存に失敗しました"));
+                  void saveSettings(saved).catch((error: unknown) => {
+                    setLocal(previous);
+                    setNote(error instanceof Error ? error.message : "保存に失敗しました");
+                  });
                 }}
               />
             </SettingRow>
@@ -174,20 +179,32 @@ export function SettingsDialog({
                   }}
                 />
               </SettingRow>
+              {notice === "model" && (points == null || points === 0) ? (
+                <input
+                  className="field num"
+                  aria-label="新しいモデルの次元"
+                  inputMode="numeric"
+                  placeholder="次元"
+                  value={nextDimension}
+                  onChange={(event) => setNextDimension(event.target.value)}
+                />
+              ) : null}
               <Impact
                 open={notice === "model"}
                 text={modelNotice}
-                canApply={points == null || points === 0}
+                canApply={(points == null || points === 0) && dimensionOk}
                 onCancel={() => {
                   setModel(embedding.model);
                   setOtherModel("");
+                  setNextDimension("");
                   setNotice(null);
                 }}
                 onApply={() => {
                   const chosen = otherModel.trim() || model;
-                  void saveEmbeddingModel(chosen, embedding.dimension).then((body) => {
+                  void saveEmbeddingModel(chosen, typedDimension).then((body) => {
                     setNotice(null);
                     setOtherModel("");
+                    setNextDimension("");
                     setModel(chosen);
                     setEmbedding({ ...embedding, model: chosen, requestedModel: chosen });
                     if (body.restartRequired) {

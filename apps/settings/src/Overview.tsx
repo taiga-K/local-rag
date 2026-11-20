@@ -48,6 +48,7 @@ export function Overview({
   const idle = !summary.pause.active && !importing;
   const ratio = summary.total === 0 ? 0 : summary.done / summary.total;
 
+  const failedKey = summary.folders.map((folder) => `${folder.id}:${folder.failed}`).join("|");
   useEffect(() => {
     let stop = false;
     void Promise.all(
@@ -71,7 +72,7 @@ export function Overview({
     return () => {
       stop = true;
     };
-  }, [summary]);
+  }, [failedKey]);
 
   useEffect(() => {
     const next = summary.current?.recordName ?? "";

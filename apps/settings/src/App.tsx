@@ -150,7 +150,7 @@ function ScreenBody({
     case "overview":
       return <Overview summary={summary} activity={activity} showAll={showAll} onShowAll={onShowAll} onReload={onReload} />;
     case "folder":
-      return folder ? <FolderScreen folder={folder} local={local} onReload={onReload} /> : null;
+      return folder ? <FolderScreen key={folder.id} folder={folder} local={local} onReload={onReload} /> : null;
     default: {
       const never: never = screen;
       return never;
