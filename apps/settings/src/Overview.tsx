@@ -54,7 +54,7 @@ export function Overview({
       summary.folders
         .filter((folder) => folder.failed > 0)
         .map(async (folder) => {
-          const records = await loadRecords(folder.id);
+          const records = await loadRecords(folder.id, "FAILED");
           return records
             .filter((row) => row.indexingStatus === "FAILED")
             .map((row) => ({ ...row, kbId: folder.id, kbName: folder.name }));

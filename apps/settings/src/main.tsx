@@ -9,10 +9,8 @@ import "./motion.css";
 import "./shell.css";
 
 const storedTheme = window.localStorage.getItem("local-rag-theme");
-const themeMode = storedTheme === "dark" || storedTheme === "light" || storedTheme === "system" ? storedTheme : "light";
-if (storedTheme === "dark" || storedTheme === "light" || storedTheme === "system") {
-  document.documentElement.dataset.theme = storedTheme;
-}
+const themeMode = storedTheme === "dark" || storedTheme === "light" || storedTheme === "system" ? storedTheme : "system";
+document.documentElement.dataset.theme = themeMode;
 
 const root = document.getElementById("root");
 if (!root) {

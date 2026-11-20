@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   loadEmbedding,
   loadRetrieveSettings,
@@ -17,10 +17,8 @@ type Cat = (typeof CATS)[number];
 type ThemeChoice = "system" | "light" | "dark";
 
 export function SettingsDialog({
-  reindexCount,
   onClose,
 }: {
-  reindexCount: number;
   onClose: () => void;
 }) {
   const [cat, setCat] = useState<Cat>("検索結果");
@@ -35,6 +33,12 @@ export function SettingsDialog({
   const [open, setOpen] = useState(false);
   const [thresholdText, setThresholdText] = useState("0.84");
   const [otherModel, setOtherModel] = useState("");
+  const retrieveRef = useRef(retrieve);
+  const textRef = useRef(thresholdText);
+  const saveSeq = useRef(0);
+  const saveChain = useRef(Promise.resolve());
+  retrieveRef.current = retrieve;
+  textRef.current = thresholdText;
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setOpen(true));
@@ -63,9 +67,54 @@ export function SettingsDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const impact = reindexCount > 0
-    ? `変更すると${reindexCount}件すべてを取り込み直します。`
-    : "取り込み直すファイルはありません。";
+  function commitThreshold(enabled: boolean): void {
+    const current = retrieveRef.current;
+    if (!current) {
+      return;
+    }
+    const number = Number(textRef.current);
+    const numberOk = Number.isFinite(number) && number >= -1 && number <= 1;
+    if (!numberOk) {
+      setThresholdText(String(current.scoreThreshold));
+      if (enabled === current.scoreThresholdEnabled) {
+        return;
+      }
+    }
+    const saved = {
+      scoreThresholdEnabled: enabled,
+      scoreThreshold: numberOk ? number : current.scoreThreshold,
+    };
+    const seq = saveSeq.current + 1;
+    saveSeq.current = seq;
+    retrieveRef.current = saved;
+    setRetrieve(saved);
+    saveChain.current = saveChain.current.then(async () => {
+      try {
+        const body = await saveRetrieveSettings(saved);
+        if (saveSeq.current !== seq) {
+          return;
+        }
+        retrieveRef.current = body;
+        setRetrieve(body);
+        setThresholdText(String(body.scoreThreshold));
+      } catch (error: unknown) {
+        if (saveSeq.current !== seq) {
+          return;
+        }
+        retrieveRef.current = current;
+        setRetrieve(current);
+        setThresholdText(String(current.scoreThreshold));
+        setNote(error instanceof Error ? error.message : "保存に失敗しました");
+      }
+    });
+  }
+
+  const points = embedding?.pointCount;
+  const modelNotice = points != null && points > 0
+    ? "点が残っているあいだ、モデルは変えられません。"
+    : points === 0
+      ? "再起動すると、このモデルに切り替わります。"
+      : "点が残っていると変更は拒否されます。受け入れられたときは、再起動が必要です。";
 
   return (
     <>
@@ -99,7 +148,7 @@ export function SettingsDialog({
           ) : null}
           {cat === "索引" && embedding ? (
             <>
-              <SettingRow name="埋め込みモデル" desc="文書を数値に変える方式です。変えると、すべてのファイルを取り込み直します。">
+              <SettingRow name="埋め込みモデル" desc="実行中のプロセスは、再起動するまで今のモデルのままです。点が残っているあいだは変えられません。">
                 <select
                   className="field"
                   value={model}
@@ -127,7 +176,8 @@ export function SettingsDialog({
               </SettingRow>
               <Impact
                 open={notice === "model"}
-                text={impact}
+                text={modelNotice}
+                canApply={points == null || points === 0}
                 onCancel={() => {
                   setModel(embedding.model);
                   setOtherModel("");
@@ -135,11 +185,14 @@ export function SettingsDialog({
                 }}
                 onApply={() => {
                   const chosen = otherModel.trim() || model;
-                  void saveEmbeddingModel(chosen, embedding.dimension).then(() => {
+                  void saveEmbeddingModel(chosen, embedding.dimension).then((body) => {
                     setNotice(null);
                     setOtherModel("");
                     setModel(chosen);
-                    setEmbedding({ ...embedding, model: chosen });
+                    setEmbedding({ ...embedding, model: chosen, requestedModel: chosen });
+                    if (body.restartRequired) {
+                      setNote("再起動すると反映されます。");
+                    }
                   }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "変更できませんでした"));
                 }}
               />
@@ -159,13 +212,18 @@ export function SettingsDialog({
               </SettingRow>
               <Impact
                 open={notice === "device"}
-                text={`${impact} APIの再起動も必要です。`}
+                text="再起動するまで、今の装置のままです。"
                 onCancel={() => {
-                  setDevice(embedding.device);
+                  setDevice(embedding.requestedDevice || embedding.device);
                   setNotice(null);
                 }}
                 onApply={() => {
-                  void saveDevice(device).then(() => setNotice(null)).catch((error: unknown) => {
+                  const previous = embedding.requestedDevice || embedding.device;
+                  void saveDevice(device).then(() => {
+                    setNotice(null);
+                    setNote("再起動すると反映されます。");
+                  }).catch((error: unknown) => {
+                    setDevice(previous);
                     setNote(error instanceof Error ? error.message : "変更できませんでした");
                   });
                 }}
@@ -196,30 +254,11 @@ export function SettingsDialog({
                   disabled={!retrieve.scoreThresholdEnabled}
                   value={thresholdText}
                   onChange={(event) => setThresholdText(event.target.value)}
-                  onBlur={() => {
-                    const number = Number(thresholdText);
-                    if (!Number.isFinite(number) || number < -1 || number > 1) {
-                      setThresholdText(String(retrieve.scoreThreshold));
-                      return;
-                    }
-                    const saved = { ...retrieve, scoreThreshold: number };
-                    void saveRetrieveSettings(saved).then((body) => {
-                      setRetrieve(body);
-                      setThresholdText(String(body.scoreThreshold));
-                    }).catch((error: unknown) => {
-                      setNote(error instanceof Error ? error.message : "保存に失敗しました");
-                    });
-                  }}
+                  onBlur={() => commitThreshold(retrieveRef.current?.scoreThresholdEnabled ?? false)}
                 />
                 <Switch
                   on={retrieve.scoreThresholdEnabled}
-                  onChange={(next) => {
-                    const saved = { ...retrieve, scoreThresholdEnabled: next };
-                    setRetrieve(saved);
-                    void saveRetrieveSettings(saved).then(setRetrieve).catch((error: unknown) => {
-                      setNote(error instanceof Error ? error.message : "保存に失敗しました");
-                    });
-                  }}
+                  onChange={(next) => commitThreshold(next)}
                 />
               </span>
             </SettingRow>
@@ -273,7 +312,19 @@ function Switch({ on, onChange }: { on: boolean; onChange: (next: boolean) => vo
   );
 }
 
-function Impact({ open, text, onCancel, onApply }: { open: boolean; text: string; onCancel: () => void; onApply: () => void }) {
+function Impact({
+  open,
+  text,
+  canApply = true,
+  onCancel,
+  onApply,
+}: {
+  open: boolean;
+  text: string;
+  canApply?: boolean;
+  onCancel: () => void;
+  onApply: () => void;
+}) {
   return (
     <div className="notice" data-open={open ? "true" : "false"} aria-live="polite">
       <div className="notice__inner">
@@ -284,7 +335,7 @@ function Impact({ open, text, onCancel, onApply }: { open: boolean; text: string
         <div>
           <div>{text}</div>
           <div className="acts">
-            <button className="primary" type="button" onClick={onApply}>変更する</button>
+            {canApply ? <button className="primary" type="button" onClick={onApply}>変更する</button> : null}
             <button className="quiet" type="button" onClick={onCancel}>キャンセル</button>
           </div>
         </div>

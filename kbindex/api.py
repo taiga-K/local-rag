@@ -171,6 +171,17 @@ class RetrieveSettingsIn(BaseModel):
         return number
 
 
+_RECORD_STATUSES = {
+    "NOT_STARTED",
+    "QUEUED",
+    "IN_PROGRESS",
+    "COMPLETED",
+    "FAILED",
+    "EMPTY",
+    "AUTO_INDEX_OFF",
+}
+
+
 class SchemaIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schemaId: str = Field(min_length=1, max_length=300)
@@ -719,12 +730,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"knowledgeBases": [{"id": row["id"], "name": row["name"]} for row in rows]})
 
     @app.get("/api/v1/kb/{kb_id}/records")
-    def list_records(kb_id: str, limit: int = 100, offset: int = 0) -> JSONResponse:
+    def list_records(kb_id: str, limit: int = 100, offset: int = 0, status: str | None = None) -> JSONResponse:
         _require_kb(app, kb_id)
+        if status is not None and status not in _RECORD_STATUSES:
+            raise PushRefusal(400, "ENVELOPE_INVALID", "status is not a record status.")
         cap = 100 if isinstance(limit, bool) or not isinstance(limit, int) else min(max(limit, 1), 200)
         off = 0 if isinstance(offset, bool) or not isinstance(offset, int) else max(offset, 0)
         with app.state.db.connect() as conn:
-            rows = list_record_status(conn, kb_id, cap, off)
+            rows = list_record_status(conn, kb_id, cap, off, status)
         return JSONResponse({"records": [_record_public(row) for row in rows]})
 
     @app.get("/api/v1/settings/local")
@@ -1323,6 +1336,13 @@ def _record_public(row) -> dict:
     }
 
 
+def _point_count(app) -> int | None:
+    try:
+        return int(app.state.vectors.count())
+    except (QdrantUnavailable, AttributeError):
+        return None
+
+
 def _embedding_body(app, row) -> dict:
     model = app.state.settings.model
     models = [model]
@@ -1336,6 +1356,7 @@ def _embedding_body(app, row) -> dict:
         "requestedDevice": row.get("requested_device"),
         "keyword": "fastembed",
         "dimension": int(app.state.embedder.dim),
+        "pointCount": _point_count(app),
         "models": models,
         "devices": ["cpu", "cuda"],
     }

@@ -89,6 +89,14 @@ def _public(row: dict) -> dict:
     }
 
 
+def _point_count() -> int:
+    return sum(1 for rows in STATE["records"].values() for row in rows if row["indexingStatus"] != "EMPTY")
+
+
+def _embedding_public() -> dict:
+    return {**STATE["embedding"], "pointCount": _point_count()}
+
+
 def _summary(now: datetime) -> dict:
     folders = []
     current = None
@@ -187,7 +195,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, STATE["retrieve"])
                 return
             if path == "/api/v1/engineer/embedding":
-                self._send(200, STATE["embedding"])
+                self._send(200, _embedding_public())
                 return
             if path == "/api/v1/ingest/activity":
                 events = []
@@ -211,6 +219,9 @@ class Handler(BaseHTTPRequestHandler):
                 params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
                 limit = int(params.get("limit", "200") or 200)
                 offset = int(params.get("offset", "0") or 0)
+                status = params.get("status")
+                if status:
+                    ordered = [row for row in ordered if row["indexingStatus"] == status]
                 page = ordered[offset:offset + limit]
                 self._send(200, {"records": [_public(row) for row in page]})
                 return
@@ -231,13 +242,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, STATE["retrieve"])
                 return
             if path == "/api/v1/engineer/embedding":
+                if _point_count() > 0:
+                    self._send(400, {"error": {"reason": "MODEL_CHANGE_REFUSED", "message": "The collection still has points."}})
+                    return
                 STATE["embedding"]["model"] = payload["model"]
                 STATE["embedding"]["requestedModel"] = payload["model"]
-                self._send(200, STATE["embedding"])
+                self._send(200, {**_embedding_public(), "restartRequired": True})
                 return
             if path == "/api/v1/engineer/device":
                 STATE["embedding"]["requestedDevice"] = payload["device"]
-                self._send(200, {**STATE["embedding"], "restartRequired": True})
+                self._send(200, {**_embedding_public(), "restartRequired": True})
                 return
             if path == "/api/v1/ingest/pause":
                 kind = payload.get("kind")

@@ -491,19 +491,31 @@ def list_kbs(conn) -> list[dict[str, Any]]:
     return list(conn.execute("select id, name from knowledge_bases order by id").fetchall())
 
 
-def list_record_status(conn, kb_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+def list_record_status(
+    conn,
+    kb_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    where = "where kb_id = %s"
+    params: list[Any] = [kb_id]
+    if status is not None:
+        where += " and indexing_status = %s"
+        params.append(status)
+    params.extend([limit, offset])
     return list(
         conn.execute(
-            """
+            f"""
             select record_id, external_record_id, record_name, indexing_status, failure_reason, version,
                    source_modified_ms, updated_at
-            from records where kb_id = %s
+            from records {where}
             order by (indexing_status = 'FAILED') desc,
                      (indexing_status = 'IN_PROGRESS') desc,
                      updated_at desc
             limit %s offset %s
             """,
-            (kb_id, limit, offset),
+            params,
         ).fetchall()
     )
 

@@ -50,6 +50,12 @@ export function App() {
 
   const folder = summary?.folders.find((item) => item.id === (screen.kind === "folder" ? screen.id : "")) ?? null;
 
+  useEffect(() => {
+    if (screen.kind === "folder" && summary && folder === null) {
+      setScreen({ kind: "overview" });
+    }
+  }, [screen, summary, folder]);
+
   return (
     <div className="app">
       <nav className="side" aria-label="local-rag">
@@ -111,7 +117,6 @@ export function App() {
       </main>
       {settingsOpen ? (
         <SettingsDialog
-          reindexCount={summary?.reindexCount ?? 0}
           onClose={() => {
             setSettingsOpen(false);
             settingsButton.current?.focus();
