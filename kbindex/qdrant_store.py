@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
+
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
+
+from kbindex.db import NAMESPACE
 
 COLLECTION = "chunks"
 
@@ -156,6 +160,38 @@ class Vectors:
             structs.append(qm.PointStruct(id=point.id, vector={"dense": list(vector)}, payload=dict(point.payload or {})))
         self.upsert(structs)
 
+    def dense_vectors(self, chunk_ids: list[str]) -> dict[str, list[float]]:
+        """Stored ``dense`` vectors for these chunk ids, fetched in one retrieve.
+
+        The point id is ``uuid5(NAMESPACE, chunkId)``, the same id written at
+        index time. A chunk with no point is absent. Callers turn that into
+        a null similarity.
+        """
+        if not chunk_ids:
+            return {}
+
+        def run() -> dict[str, list[float]]:
+            if COLLECTION not in self._names():
+                return {}
+            by_point = {str(uuid.uuid5(NAMESPACE, cid)): cid for cid in chunk_ids}
+            points = self.client.retrieve(
+                collection_name=COLLECTION,
+                ids=list(by_point),
+                with_payload=False,
+                with_vectors=["dense"],
+            )
+            found: dict[str, list[float]] = {}
+            for point in points:
+                cid = by_point.get(str(point.id))
+                if cid is None:
+                    continue
+                values = _dense_values(point.vector)
+                if values is not None:
+                    found[cid] = values
+            return found
+
+        return self._call(run)
+
     def search(self, vector: list[float], *, limit: int, kb_ids: list[str] | None) -> list[tuple[str, float]]:
         def run() -> list[tuple[str, float]]:
             if COLLECTION not in self._names():
@@ -186,3 +222,14 @@ class Vectors:
             return out
 
         return self._call(run)
+
+
+def _dense_values(vector: object) -> list[float] | None:
+    raw = vector.get("dense") if isinstance(vector, dict) else vector
+    if raw is None or isinstance(raw, (str, bytes)):
+        return None
+    try:
+        values = [float(item) for item in raw]
+    except (TypeError, ValueError):
+        return None
+    return values or None

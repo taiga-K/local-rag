@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import uuid
@@ -14,7 +15,7 @@ import redis
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from kbindex.config import Settings, load_settings, rebuild_enabled
 from kbindex.contract import (
@@ -35,7 +36,9 @@ from kbindex.db import (
     queue_kb_records,
     save_local_settings,
     save_requested_model,
+    save_score_threshold,
     save_upload_limit,
+    score_threshold_payload,
     delete_chunks_for,
     kb_row,
     lock_record,
@@ -129,6 +132,22 @@ class EmbeddingIn(BaseModel):
 class UploadLimitIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     maxBytes: int = Field(ge=1, le=MAX_BODY_BYTES)
+
+
+class RetrieveSettingsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    scoreThresholdEnabled: bool
+    scoreThreshold: float = Field(ge=-1, le=1)
+
+    @field_validator("scoreThreshold", mode="before")
+    @classmethod
+    def _finite_threshold(cls, value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("scoreThreshold must be a number")
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("scoreThreshold must be finite")
+        return number
 
 
 class SchemaIn(BaseModel):
@@ -723,6 +742,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             conn.commit()
         return JSONResponse(_local_body(row))
+
+    @app.get("/api/v1/settings/retrieve")
+    def get_retrieve_settings() -> JSONResponse:
+        with app.state.db.connect() as conn:
+            row = app_settings_row(conn)
+        return JSONResponse(score_threshold_payload(row))
+
+    @app.put("/api/v1/settings/retrieve")
+    async def put_retrieve_settings(request: Request) -> JSONResponse:
+        try:
+            payload = RetrieveSettingsIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The retrieve settings body is invalid.") from None
+        with app.state.db.connect() as conn:
+            row = save_score_threshold(
+                conn,
+                enabled=payload.scoreThresholdEnabled,
+                threshold=payload.scoreThreshold,
+            )
+            conn.commit()
+        return JSONResponse(score_threshold_payload(row))
 
     @app.get("/api/v1/engineer/embedding")
     def get_embedding() -> JSONResponse:

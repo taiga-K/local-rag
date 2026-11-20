@@ -272,6 +272,7 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
       "id": "{recordId}:{blockIndex}",
       "text": "...",
       "score": 0.0327,
+      "similarity": 0.82,
       "record": {
         "recordId": "doc-1",
         "name": "案内",
@@ -291,7 +292,13 @@ PipesHub は `app/api/routes/search.py` の `RetrieveQuery` と `POST /retrieve`
 }
 ```
 
-`score` は RRF の値である。`connector` は知識ベース id である。PipesHub のコネクタ名に相当する枠だけ残す。`id` は PipesHub の `{virtualRecordId}:{blockIndex}` に合わせ、こちらでは `{recordId}:{blockIndex}` である（`search.py` の `_retrieve_chunks`）。同じブロックを複数片に割ったときは、2片目以降の `id` に `:{piece}` を足す。片が1つなら足さない。足さないと id が衝突する。ヒットが無ければ `chunks` は空で 200 である。`incomplete` は、キーワード側かベクトル側の一方が失敗したときに true である。両方失敗なら 503 である。
+`score` は RRF の値である。類似度では並べ替えない。`similarity` は、その検索で一度計算したクエリベクトルと、チャンクの保存済み `dense` ベクトルとの余弦である。埋め直しはしない。点 id は `uuid5(NAMESPACE, chunkId)` で、融合後に残った候補（BM25 だけで当たったものを含む）を `retrieve` の 1 回で取る。ベクトルが無い、または次元が違うときは null である。零ベクトルの余弦は 0 とする。埋め込みは正規化してあるが、余弦はノルムで割る。
+
+しきい値は `app_settings` の `score_threshold_enabled`（既定 false）と `score_threshold` である。数値の既定は `DEFAULT_SCORE_THRESHOLD`（0.5）だけに置く。列が null のあいだは、その定数を使う。`GET` と `PUT /api/v1/settings/retrieve` が読み書きする。ボディは `scoreThresholdEnabled` と、`-1` 以上 `1` 以下の有限数 `scoreThreshold` である。
+
+無効のときは誰も落とさない。順序と `score` は今までと同じで、`similarity` が付く。ベクトルの取得に失敗したときは類似度を null にして、結果は返す。有効のときは、類似度がしきい値未満の候補と、ベクトルの無い候補を、`limit` で切る前に落とす。しきい値と等しいものは残る。残った候補で件数を埋める。全部落ちたら `chunks` は空で 200 である。取得に失敗したときは 503 `QDRANT_UNAVAILABLE` である。リランカは無い。
+
+`connector` は知識ベース id である。PipesHub のコネクタ名に相当する枠だけ残す。`id` は PipesHub の `{virtualRecordId}:{blockIndex}` に合わせ、こちらでは `{recordId}:{blockIndex}` である（`search.py` の `_retrieve_chunks`）。同じブロックを複数片に割ったときは、2片目以降の `id` に `:{piece}` を足す。片が1つなら足さない。足さないと id が衝突する。ヒットが無ければ `chunks` は空で 200 である。`incomplete` は、キーワード側かベクトル側の一方が失敗したときに true である。両方失敗なら 503 である。
 
 `maxChunksPerRecord` があるとき、融合後の列からレコードごとにその件数まで残し、その後 `limit` で切る。
 
@@ -544,6 +551,7 @@ taiga が寝ているあいだ、`rag_requirements.md` に無い細部は PipesH
 9. 決定: 全削除と全再埋め込みは `POST /api/v1/connectors/vector-store/cleanup` と `POST /api/v1/connectors/vector-store/reindex`。画面には出さない。証拠: Labs の同じ操作（`gui_settings_scope.md`、`POST /api/v1/connectors/vector-store/cleanup` と `reindex`）。戻し方: この2つの別名を外す。既存の `/api/v1/index/cleanup` と `/api/v1/index/reindex` は残る。
 10. 決定: Electron に出すのはフォルダ、自動索引、再索引、取り込み状況だけ。証拠: 一般利用者の項目は個人コネクタの索引設定、再索引、状態表示である（`gui_settings_scope.md` 3 章）。管理者項目は画面に置かない。戻し方: `apps/settings/src/view.ts` の `SCREENS` を見る。
 11. 決定: API はリクエストの `Origin` をそのまま `Access-Control-Allow-Origin` に返す。証拠: 画面は `http://127.0.0.1:43124` から `43123` を呼ぶ。CORS ヘッダが無い GET は Electron で `Failed to fetch` になった。パッケージした画面の origin は `null` である。戻し方: `CORSMiddleware` を外す。
+12. 決定: 検索の類似度しきい値は既定オフにする。数値の既定 0.5 は `DEFAULT_SCORE_THRESHOLD` だけに置く。融合の `score` は RRF のまま、しきい値は融合のあと、件数を切る前に余弦へかける。画面はまだ出さない。読み書きは `GET/PUT /api/v1/settings/retrieve`。戻し方: この定数と、`app_settings` の2列と、`pipeline.search` の余弦を外す。
 
 ## 未決
 
