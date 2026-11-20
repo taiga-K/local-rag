@@ -4,6 +4,7 @@ import { FolderScreen } from "./FolderScreen";
 import { Icon } from "./icons";
 import { Overview } from "./Overview";
 import { SettingsDialog } from "./SettingsDialog";
+import { statusBarLabel } from "./view";
 
 type Screen = { kind: "overview" } | { kind: "folder"; id: string };
 
@@ -60,6 +61,7 @@ export function App() {
     <div className="app">
       <div className="body">
       <nav className="side" aria-label="local-rag">
+        <div className="side-scroll">
         <div className="brand">local-rag</div>
         <button className={screen.kind === "overview" ? "nav-row is-selected" : "nav-row"} type="button" data-measure="nav-row" onClick={() => setScreen({ kind: "overview" })}>
           <Icon name="home" size={16} />
@@ -106,7 +108,7 @@ export function App() {
             <button className="quiet" type="submit">追加</button>
           </form>
         ) : null}
-        <div className="spacer" />
+        </div>
         <button ref={settingsButton} className="nav-row" type="button" onClick={() => setSettingsOpen(true)}>
           <Icon name="gear" size={16} />
           <span className="t">設定</span>
@@ -148,14 +150,13 @@ function StatusBar({
   onOverview: () => void;
   onFailures: () => void;
 }) {
-  const remaining = Math.max(summary.total - summary.done, 0);
   const working = !summary.pause.active && (summary.active > 0 || summary.queued > 0);
   const ratio = summary.total === 0 ? 0 : summary.done / summary.total;
   return (
     <div className="statusbar" data-measure="statusbar">
       <button type="button" onClick={onOverview}>
         {working ? <span className="spinner" /> : summary.pause.active ? <Icon name="pause" size={14} /> : <Icon name="check" size={14} />}
-        <span className="num">{remaining > 0 ? `残り${remaining}件` : "すべて取り込み済み"}</span>
+        <span className="num">{statusBarLabel(summary)}</span>
         {working ? <span className="mini-bar" aria-hidden="true"><i style={{ width: `${Math.round(ratio * 100)}%` }} /></span> : null}
       </button>
       {summary.failed > 0 ? (

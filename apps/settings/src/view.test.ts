@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCREENS, SettingsSaver, autoIndexCopy, commitSettingsChange, countRows, failureLine, folderCountItems, folderSentence, foldersText, parseFolders, showsAdminControls, statusLabel, visibleRecords } from "./view";
+import { SCREENS, SettingsSaver, autoIndexCopy, commitSettingsChange, countRows, failureLine, folderCountItems, folderSentence, foldersText, parseFolders, showsAdminControls, statusBarLabel, statusLabel, visibleRecords } from "./view";
 
 describe("settings view", () => {
   it("keeps unique folder paths and drops blanks", () => {
@@ -105,6 +105,8 @@ describe("settings view", () => {
     expect(failureLine(true, "INDEX_FAILED")).toBe("このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。");
     expect(failureLine(true, "TimeoutError: read timed out")).toBe("TimeoutError: read timed out");
     expect(failureLine(true, "あ".repeat(161))).toHaveLength(160);
+    expect(statusBarLabel({ active: 1, queued: 346 })).toBe("残り347件");
+    expect(statusBarLabel({ active: 0, queued: 0 })).toBe("すべて取り込み済み");
     expect(statusLabel("QUEUED")).toBe("待ち");
     expect(statusLabel("FAILED")).toBe("失敗");
     expect(statusLabel("UNKNOWN")).toBe("分類できない状態");

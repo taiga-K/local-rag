@@ -68,7 +68,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
+.side-scroll { flex: 1; min-height: 0; overflow: auto; }
 .brand, .nav-row {
   height: 32px;
   display: flex;

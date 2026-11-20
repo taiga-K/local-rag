@@ -212,7 +212,12 @@ export function SettingsDialog({
                     setOtherModel("");
                     setNextDimension("");
                     setModel(chosen);
-                    setEmbedding({ ...embedding, model: chosen, requestedModel: chosen });
+                    setEmbedding({
+                      ...embedding,
+                      model: chosen,
+                      requestedModel: chosen,
+                      models: embedding.models.includes(chosen) ? embedding.models : [...embedding.models, chosen],
+                    });
                     if (body.restartRequired) {
                       setNote("再起動すると反映されます。");
                     }

@@ -80,6 +80,11 @@ export function statusLabel(status: string): string {
   }
 }
 
+export function statusBarLabel(summary: { active: number; queued: number }): string {
+  const remaining = summary.active + summary.queued;
+  return remaining > 0 ? `残り${remaining}件` : "すべて取り込み済み";
+}
+
 export function resultLabel(status: string): string {
   switch (status) {
     case "COMPLETED":
