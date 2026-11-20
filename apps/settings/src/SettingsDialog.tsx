@@ -13,6 +13,7 @@ import {
 } from "./api";
 
 const CATS = ["取り込み", "索引", "検索結果", "表示"] as const;
+const OTHER_MODEL = "__other__";
 type Cat = (typeof CATS)[number];
 type ThemeChoice = "system" | "light" | "dark";
 
@@ -123,7 +124,6 @@ export function SettingsDialog({
       <div className="backdrop" data-open={open ? "true" : "false"} onClick={onClose} />
       <div className="modal" data-open={open ? "true" : "false"} role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div className="modal-side">
-          <div className="cap">設定</div>
           {CATS.map((item) => (
             <button key={item} className={cat === item ? "nav-row is-selected" : "nav-row"} type="button" onClick={() => setCat(item)}>
               <span className="t">{item}</span>
@@ -131,8 +131,7 @@ export function SettingsDialog({
           ))}
         </div>
         <div className="modal-main">
-          <h2 id="settings-title" style={{ margin: 0, fontSize: 16, lineHeight: "24px" }}>{cat}</h2>
-          <div className="rule" />
+          <h2 id="settings-title" className="page-title">{cat}</h2>
           {cat === "取り込み" && local ? (
             <SettingRow
               name="自動で取り込む"
@@ -155,47 +154,51 @@ export function SettingsDialog({
           {cat === "索引" && embedding ? (
             <>
               <SettingRow name="埋め込みモデル" desc="実行中のプロセスは、再起動するまで今のモデルのままです。点が残っているあいだは変えられません。">
-                <select
-                  className="field"
-                  value={model}
-                  aria-label="埋め込みモデル"
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setDevice(embedding.requestedDevice || embedding.device);
-                    setModel(next);
-                    setNotice(next === embedding.model ? null : "model");
-                  }}
-                >
-                  {embedding.models.map((item) => <option key={item} value={item}>{item}</option>)}
-                </select>
-                <input
-                  className="field"
-                  aria-label="別のモデル名"
-                  value={otherModel}
-                  placeholder="別のモデル名"
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setDevice(embedding.requestedDevice || embedding.device);
-                    setOtherModel(next);
-                    const chosen = next.trim();
-                    setNotice(chosen && chosen !== embedding.model ? "model" : model !== embedding.model ? "model" : null);
-                  }}
-                />
+                <div className="control-col">
+                  <select
+                    className="field mono"
+                    value={model}
+                    aria-label="埋め込みモデル"
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setDevice(embedding.requestedDevice || embedding.device);
+                      setModel(next);
+                      if (next === OTHER_MODEL) {
+                        setNotice("model");
+                        return;
+                      }
+                      setOtherModel("");
+                      setNotice(next === embedding.model ? null : "model");
+                    }}
+                  >
+                    {embedding.models.map((item) => <option key={item} value={item}>{item}</option>)}
+                    <option value={OTHER_MODEL}>別のモデルを追加…</option>
+                  </select>
+                  {model === OTHER_MODEL ? (
+                    <input
+                      className="field"
+                      aria-label="別のモデル名"
+                      value={otherModel}
+                      placeholder="モデル名"
+                      onChange={(event) => setOtherModel(event.target.value)}
+                    />
+                  ) : null}
+                </div>
               </SettingRow>
-              {notice === "model" && (points == null || points === 0) ? (
-                <input
-                  className="field num"
-                  aria-label="新しいモデルの次元"
-                  inputMode="numeric"
-                  placeholder="次元"
-                  value={nextDimension}
-                  onChange={(event) => setNextDimension(event.target.value)}
-                />
-              ) : null}
               <Impact
                 open={notice === "model"}
                 text={modelNotice}
-                canApply={(points == null || points === 0) && dimensionOk}
+                extra={notice === "model" && (points == null || points === 0) ? (
+                  <input
+                    className="field num"
+                    aria-label="新しいモデルの次元"
+                    inputMode="numeric"
+                    placeholder="次元"
+                    value={nextDimension}
+                    onChange={(event) => setNextDimension(event.target.value)}
+                  />
+                ) : null}
+                canApply={(points == null || points === 0) && dimensionOk && (model !== OTHER_MODEL || otherModel.trim() !== "")}
                 onCancel={() => {
                   setModel(embedding.model);
                   setOtherModel("");
@@ -203,20 +206,25 @@ export function SettingsDialog({
                   setNotice(null);
                 }}
                 onApply={() => {
-                  const chosen = otherModel.trim() || model;
+                  const chosen = model === OTHER_MODEL ? otherModel.trim() : model;
                   void saveEmbeddingModel(chosen, typedDimension).then((body) => {
                     setNotice(null);
                     setOtherModel("");
                     setNextDimension("");
                     setModel(chosen);
-                    setEmbedding({ ...embedding, model: chosen, requestedModel: chosen });
+                    setEmbedding({
+                      ...embedding,
+                      model: chosen,
+                      requestedModel: chosen,
+                      models: embedding.models.includes(chosen) ? embedding.models : [...embedding.models, chosen],
+                    });
                     if (body.restartRequired) {
                       setNote("再起動すると反映されます。");
                     }
                   }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "変更できませんでした"));
                 }}
               />
-              <SettingRow name="計算に使う装置" desc="実行中のプロセスは、再起動するまで今の装置のままです。">
+              <SettingRow name="計算に使う装置" desc="起動中の処理は、次に起動するまで今の装置のまま動きます。">
                 <select
                   className="field"
                   value={device}
@@ -252,7 +260,7 @@ export function SettingsDialog({
                   });
                 }}
               />
-              <SettingRow name="キーワード検索の方式" desc="いま使える方式は fastembed だけです。">
+              <SettingRow name="キーワード検索の方式" desc="いま選べるのは fastembed だけです。">
                 <select className="field" value={embedding.keyword} aria-label="キーワード検索の方式" disabled>
                   <option value={embedding.keyword}>{embedding.keyword}</option>
                 </select>
@@ -260,32 +268,33 @@ export function SettingsDialog({
             </>
           ) : null}
           {cat === "検索結果" && retrieve ? (
-            <SettingRow
-              name="類似度のしきい値"
-              desc={
-                <>
-                  オンにすると、質問との類似度がこの値より低い文書を検索結果から外します。結果が
-                  <span className="nowrap">0件</span>
-                  になることがあります。
-                </>
-              }
-            >
-              <span className="switch-line">
-                <input
-                  className={retrieve.scoreThresholdEnabled ? "field threshold-field num" : "field threshold-field num is-off"}
-                  aria-label="類似度のしきい値"
-                  inputMode="decimal"
-                  disabled={!retrieve.scoreThresholdEnabled}
-                  value={thresholdText}
-                  onChange={(event) => setThresholdText(event.target.value)}
-                  onBlur={() => commitThreshold(retrieveRef.current?.scoreThresholdEnabled ?? false)}
-                />
+            <>
+              <SettingRow
+                name="類似度で絞り込む"
+                desc="質問との類似度が低い文書を検索結果から外します。結果が0件になることがあります。"
+              >
                 <Switch
                   on={retrieve.scoreThresholdEnabled}
                   onChange={(next) => commitThreshold(next)}
                 />
-              </span>
-            </SettingRow>
+              </SettingRow>
+              {retrieve.scoreThresholdEnabled ? (
+                <div className="set-row is-child">
+                  <div className="copy">
+                    <div className="name">しきい値</div>
+                    <div className="desc">-1〜1の値。初期値は0.84です。</div>
+                  </div>
+                  <input
+                    className="field num"
+                    aria-label="しきい値"
+                    inputMode="decimal"
+                    value={thresholdText}
+                    onChange={(event) => setThresholdText(event.target.value)}
+                    onBlur={() => commitThreshold(true)}
+                  />
+                </div>
+              ) : null}
+            </>
           ) : null}
           {cat === "表示" ? (
             <SettingRow name="テーマ" desc="OSに合わせる、ライト、ダークから選びます。">
@@ -316,7 +325,7 @@ export function SettingsDialog({
 function SettingRow({ name, desc, children }: { name: string; desc: ReactNode; children: ReactNode }) {
   return (
     <div className="set-row">
-      <div>
+      <div className="copy">
         <div className="name">{name}</div>
         <div className="desc">{desc}</div>
       </div>
@@ -339,12 +348,14 @@ function Switch({ on, onChange }: { on: boolean; onChange: (next: boolean) => vo
 function Impact({
   open,
   text,
+  extra = null,
   canApply = true,
   onCancel,
   onApply,
 }: {
   open: boolean;
   text: string;
+  extra?: ReactNode;
   canApply?: boolean;
   onCancel: () => void;
   onApply: () => void;
@@ -356,8 +367,9 @@ function Impact({
           <circle cx="8" cy="8" r="6" />
           <path d="M8 7.25v4M8 4.75v.5" />
         </svg>
-        <div>
-          <div>{text}</div>
+        <div className="notice__body">
+          <div className="type-body-wrap">{text}</div>
+          {extra}
           <div className="acts">
             {canApply ? <button className="primary" type="button" onClick={onApply}>変更する</button> : null}
             <button className="quiet" type="button" onClick={onCancel}>キャンセル</button>

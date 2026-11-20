@@ -3,7 +3,7 @@ import { detachKb, loadRecords, reprocessRecord, type FolderCount, type LocalSet
 import { configuredFolder, folderBridge } from "./bridge";
 import { stamp } from "./format";
 import { Icon } from "./icons";
-import { failureLine, folderSentence, statusLabel, visibleRecords } from "./view";
+import { failureLine, folderCountItems, statusLabel, visibleRecords } from "./view";
 
 export function FolderScreen({
   folder,
@@ -56,12 +56,10 @@ export function FolderScreen({
       <div className="page-head">
         <div>
           <h1 className="page-title">{folder.name}</h1>
-          <div className="path">
-            {local?.includeSubfolders ? "下の階層を含む" : "そのフォルダだけ"}
-            {local && local.folders.length > 0 ? `　${local.folders.join("、")}` : ""}
-          </div>
+          {local && local.folders.length > 0 ? <div className="path">{local.folders.join("、")}</div> : null}
+          <div className="path-sub">{local?.includeSubfolders ? "下の階層も取り込む" : "そのフォルダだけ"}</div>
         </div>
-        <div style={{ display: "flex", gap: 4 }}>
+        <div className="page-actions">
           {openable && bridge ? (
             <button
               className="quiet"
@@ -80,7 +78,19 @@ export function FolderScreen({
           <button className="quiet" type="button" onClick={() => setConfirm(true)}>取り込みから外す</button>
         </div>
       </div>
-      <p className="sub" style={{ marginTop: 16 }}>{folderSentence(folder)}</p>
+      {folder.total === 0 ? (
+        <p className="count-line">ファイルはありません</p>
+      ) : (
+        <div className="count-line num">
+          {folderCountItems(folder).map((item) => item.key === "failed" ? (
+            <button key={item.key} className="quiet" type="button" onClick={() => setFailedOnly(true)}>
+              {item.label} {item.count}
+            </button>
+          ) : (
+            <span key={item.key}>{item.label} {item.count}</span>
+          ))}
+        </div>
+      )}
       <div className="tools">
         <label className="search">
           <Icon name="search" />
@@ -100,7 +110,7 @@ export function FolderScreen({
         </thead>
         <tbody>
           {shown.map((row) => (
-            <FileRows
+            <FileRow
               key={row.recordId}
               row={row}
               folder={folder}
@@ -135,7 +145,7 @@ export function FolderScreen({
   );
 }
 
-function FileRows({
+function FileRow({
   row,
   folder,
   onRetried,
@@ -148,22 +158,17 @@ function FileRows({
 }) {
   const failed = row.indexingStatus === "FAILED";
   return (
-    <>
-      <tr>
-        <td>{row.recordName}</td>
-        <td className="num">{stamp(row.sourceModifiedMs, row.updatedAt)}</td>
-        <td>
-          {failed ? (
-            <span className="fail-state"><Icon name="err" size={14} />失敗</span>
-          ) : (
-            <span style={{ color: "var(--text-2)" }}>{statusLabel(row.indexingStatus)}</span>
-          )}
-        </td>
-      </tr>
-      {failed ? (
-        <tr className="fail-extra">
-          <td colSpan={3}>
-            <span>{failureLine(row.failureClassified, row.failureMessage)}</span>
+    <tr className={failed ? "is-failed" : undefined}>
+      <td>
+        <div>{row.recordName}</div>
+        {failed ? <div className="file-why">{failureLine(row.failureClassified, row.failureMessage)}</div> : null}
+      </td>
+      <td className="num">{stamp(row.sourceModifiedMs, row.updatedAt)}</td>
+      <td>
+        {failed ? (
+          <span className="fail-state">
+            <Icon name="err" size={12} />
+            失敗
             <button
               className="retry-link"
               type="button"
@@ -175,9 +180,11 @@ function FileRows({
             >
               再試行
             </button>
-          </td>
-        </tr>
-      ) : null}
-    </>
+          </span>
+        ) : (
+          <span style={{ color: "var(--text-2)" }}>{statusLabel(row.indexingStatus)}</span>
+        )}
+      </td>
+    </tr>
   );
 }

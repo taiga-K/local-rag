@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCREENS, SettingsSaver, autoIndexCopy, commitSettingsChange, countRows, failureLine, folderSentence, foldersText, parseFolders, showsAdminControls, statusLabel, visibleRecords } from "./view";
+import { SCREENS, SettingsSaver, autoIndexCopy, commitSettingsChange, countRows, failureLine, folderCountItems, folderSentence, foldersText, parseFolders, showsAdminControls, statusBarLabel, statusLabel, visibleRecords } from "./view";
 
 describe("settings view", () => {
   it("keeps unique folder paths and drops blanks", () => {
@@ -99,16 +99,27 @@ describe("settings view", () => {
     expect(result.message).toBe("down");
   });
 
-  it("does not invent a failure sentence", () => {
-    expect(failureLine(true, "QDRANT_UNAVAILABLE")).toBe("QDRANT_UNAVAILABLE");
-    expect(failureLine(false, null)).toContain("原因が記録されていません");
+  it("maps only the two known failure sentences", () => {
+    expect(failureLine(true, "QDRANT_UNAVAILABLE")).toBe("検索用のデータベースに接続できませんでした。local-rag を起動し直してから、再試行してください。");
+    expect(failureLine(false, null)).toBe("このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。");
+    expect(failureLine(true, "INDEX_FAILED")).toBe("このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。");
+    expect(failureLine(true, "TimeoutError: read timed out")).toBe("TimeoutError: read timed out");
+    expect(failureLine(true, "あ".repeat(161))).toHaveLength(160);
+    expect(statusBarLabel({ active: 1, queued: 346 })).toBe("残り347件");
+    expect(statusBarLabel({ active: 0, queued: 0 })).toBe("すべて取り込み済み");
+    expect(statusLabel("QUEUED")).toBe("待ち");
     expect(statusLabel("FAILED")).toBe("失敗");
     expect(statusLabel("UNKNOWN")).toBe("分類できない状態");
   });
 
   it("counts a folder from its own numbers and filters the table", () => {
     expect(folderSentence({ total: 4, completed: 4, active: 0, failed: 0, queued: 0 })).toBe("4件を取り込み済みです。");
-    expect(folderSentence({ total: 4, completed: 1, active: 1, failed: 1, queued: 1 })).toContain("1件は取り込み待ち");
+    expect(folderCountItems({ completed: 1, active: 1, failed: 1, queued: 347 }).map((item) => `${item.label} ${item.count}`)).toEqual([
+      "取り込み済み 1",
+      "待ち 347",
+      "取り込み中 1",
+      "失敗 1",
+    ]);
     const rows = [
       { recordName: "議事録", indexingStatus: "COMPLETED" },
       { recordName: "予算", indexingStatus: "FAILED" },
