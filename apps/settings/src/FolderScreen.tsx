@@ -22,17 +22,29 @@ export function FolderScreen({
 
   useEffect(() => {
     let stop = false;
-    void loadRecords(folder.id).then((rows) => {
-      if (!stop) {
-        setRecords(rows);
+    let busy = false;
+    const run = () => {
+      if (busy || stop) {
+        return;
       }
-    }).catch((error: unknown) => {
-      if (!stop) {
-        setNote(error instanceof Error ? error.message : "ファイルを読めません");
-      }
-    });
+      busy = true;
+      void loadRecords(folder.id).then((rows) => {
+        busy = false;
+        if (!stop) {
+          setRecords(rows);
+        }
+      }).catch((error: unknown) => {
+        busy = false;
+        if (!stop) {
+          setNote(error instanceof Error ? error.message : "ファイルを読めません");
+        }
+      });
+    };
+    run();
+    const timer = window.setInterval(run, 5000);
     return () => {
       stop = true;
+      window.clearInterval(timer);
     };
   }, [folder.id]);
 

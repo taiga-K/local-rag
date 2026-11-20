@@ -48,29 +48,43 @@ export function Overview({
   const idle = !summary.pause.active && !importing;
   const ratio = summary.total === 0 ? 0 : summary.done / summary.total;
 
+  const foldersRef = useRef(summary.folders);
+  foldersRef.current = summary.folders;
   const failedKey = summary.folders.map((folder) => `${folder.id}:${folder.failed}`).join("|");
   useEffect(() => {
     let stop = false;
-    void Promise.all(
-      summary.folders
-        .filter((folder) => folder.failed > 0)
-        .map(async (folder) => {
-          const records = await loadRecords(folder.id, "FAILED");
-          return records
-            .filter((row) => row.indexingStatus === "FAILED")
-            .map((row) => ({ ...row, kbId: folder.id, kbName: folder.name }));
-        }),
-    ).then((groups) => {
-      if (!stop) {
-        setFailed(groups.flat());
+    let busy = false;
+    const run = () => {
+      if (busy || stop) {
+        return;
       }
-    }).catch((error: unknown) => {
-      if (!stop) {
-        setNote(error instanceof Error ? error.message : "失敗したファイルを読めません");
-      }
-    });
+      busy = true;
+      void Promise.all(
+        foldersRef.current
+          .filter((folder) => folder.failed > 0)
+          .map(async (folder) => {
+            const records = await loadRecords(folder.id, "FAILED");
+            return records
+              .filter((row) => row.indexingStatus === "FAILED")
+              .map((row) => ({ ...row, kbId: folder.id, kbName: folder.name }));
+          }),
+      ).then((groups) => {
+        busy = false;
+        if (!stop) {
+          setFailed(groups.flat());
+        }
+      }).catch((error: unknown) => {
+        busy = false;
+        if (!stop) {
+          setNote(error instanceof Error ? error.message : "失敗したファイルを読めません");
+        }
+      });
+    };
+    run();
+    const timer = window.setInterval(run, 5000);
     return () => {
       stop = true;
+      window.clearInterval(timer);
     };
   }, [failedKey]);
 
