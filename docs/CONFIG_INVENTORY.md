@@ -76,7 +76,7 @@
 | 方式 | RRF だけ | `config.yaml` L16-L17、`kbindex/config.py` L79-L81 | 要件 | `rag_requirements.md`。`fusion_methods.md` |
 | レコードへの集約 | `maxChunksPerRecord` があれば融合順の先着 | `kbindex/pipeline.py` L359-L368 | 文書化した既定 | ハーネスは 1 を送る |
 | retrieve の件数 | 既定 10、上限 10 | `kbindex/api.py` L174-L176 | 要件 | この依頼の「既定 10、上限 10」。PipesHub は既定 8、上限 50。`DESIGN.md` L516 |
-| スコア閾値 | 既定オフ。オンのとき、融合後かつ `limit` の前に、余弦が閾値未満の候補とベクトルの無い候補を落とす。オフのときは落とさず `similarity` を付ける。`score` は RRF のまま。閾値の既定 0.5 は `DEFAULT_SCORE_THRESHOLD` だけ | `kbindex/similarity.py`、`kbindex/pipeline.py` の `search`、`GET/PUT /api/v1/settings/retrieve` | この依頼 | Dify の `score_threshold_enabled` と `score_threshold`。リランカは足さない |
+| スコア閾値 | 既定オフ。数値の既定 0.84 は `DEFAULT_SCORE_THRESHOLD` だけ。`cl-nagoya/ruri-v3-310m` の計測値で、モデルを替えたら測り直す。オンのとき、融合後かつ `limit` の前に、余弦が閾値未満の候補とベクトルの無い候補を落とす。オフのときは落とさず `similarity` を付ける。`score` は RRF のまま | `kbindex/similarity.py`、`kbindex/pipeline.py` の `search`、`GET/PUT /api/v1/settings/retrieve` | この依頼 | `cursor/sim-threshold-measure` の `d526787`、`measure/out/fine.json`。Dify の 0.5 はこのモデルでは候補を落とさない（`measure/out/summary.json`） |
 | リランカ | 無い | `DESIGN.md` L498 | 要件 | `rag_requirements.md` |
 | クエリ書き換え | `rewriteQuery: true` は 400 | `kbindex/api.py` L169-L173 | 要件 | LLM が無い |
 
