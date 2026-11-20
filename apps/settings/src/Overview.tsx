@@ -90,8 +90,13 @@ export function Overview({
 
   useEffect(() => {
     const next = summary.current?.recordName ?? "";
+    if (!next) {
+      setFileShown("");
+      setFileDim(false);
+      return;
+    }
     const now = Date.now();
-    if (!next || next === fileShown || now - lastSwap.current < 1000) {
+    if (next === fileShown || now - lastSwap.current < 1000) {
       return;
     }
     lastSwap.current = now;
@@ -126,8 +131,12 @@ export function Overview({
     setMenu(false);
     menuButton.current?.focus();
     const until = kind === "tomorrow" ? nextLocalMidnight() : null;
-    await setPause(kind, until);
-    await onReload();
+    try {
+      await setPause(kind, until);
+      await onReload();
+    } catch (error: unknown) {
+      setNote(error instanceof Error ? error.message : "一時停止を保存できませんでした");
+    }
   }
 
   async function retry(row: Failed) {

@@ -512,7 +512,8 @@ def list_record_status(
             from records {where}
             order by (indexing_status = 'FAILED') desc,
                      (indexing_status = 'IN_PROGRESS') desc,
-                     updated_at desc
+                     updated_at desc,
+                     record_id
             limit %s offset %s
             """,
             params,

@@ -73,8 +73,9 @@ export function SettingsDialog({
     if (!current) {
       return;
     }
-    const number = Number(textRef.current);
-    const numberOk = Number.isFinite(number) && number >= -1 && number <= 1;
+    const raw = textRef.current.trim();
+    const number = Number(raw);
+    const numberOk = raw !== "" && Number.isFinite(number) && number >= -1 && number <= 1;
     if (!numberOk) {
       setThresholdText(String(current.scoreThreshold));
       if (enabled === current.scoreThresholdEnabled) {
@@ -160,6 +161,7 @@ export function SettingsDialog({
                   aria-label="埋め込みモデル"
                   onChange={(event) => {
                     const next = event.target.value;
+                    setDevice(embedding.requestedDevice || embedding.device);
                     setModel(next);
                     setNotice(next === embedding.model ? null : "model");
                   }}
@@ -173,6 +175,7 @@ export function SettingsDialog({
                   placeholder="別のモデル名"
                   onChange={(event) => {
                     const next = event.target.value;
+                    setDevice(embedding.requestedDevice || embedding.device);
                     setOtherModel(next);
                     const chosen = next.trim();
                     setNotice(chosen && chosen !== embedding.model ? "model" : model !== embedding.model ? "model" : null);
@@ -220,6 +223,9 @@ export function SettingsDialog({
                   aria-label="計算に使う装置"
                   onChange={(event) => {
                     const next = event.target.value;
+                    setModel(embedding.model);
+                    setOtherModel("");
+                    setNextDimension("");
                     setDevice(next);
                     setNotice(next === embedding.device ? null : "device");
                   }}

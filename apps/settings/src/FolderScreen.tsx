@@ -100,7 +100,13 @@ export function FolderScreen({
         </thead>
         <tbody>
           {shown.map((row) => (
-            <FileRows key={row.recordId} row={row} folder={folder} onRetried={() => void loadRecords(folder.id).then(setRecords)} />
+            <FileRows
+              key={row.recordId}
+              row={row}
+              folder={folder}
+              onRetried={() => void loadRecords(folder.id).then(setRecords)}
+              onError={setNote}
+            />
           ))}
         </tbody>
       </table>
@@ -129,7 +135,17 @@ export function FolderScreen({
   );
 }
 
-function FileRows({ row, folder, onRetried }: { row: RecordRow; folder: FolderCount; onRetried: () => void }) {
+function FileRows({
+  row,
+  folder,
+  onRetried,
+  onError,
+}: {
+  row: RecordRow;
+  folder: FolderCount;
+  onRetried: () => void;
+  onError: (message: string) => void;
+}) {
   const failed = row.indexingStatus === "FAILED";
   return (
     <>
@@ -148,7 +164,15 @@ function FileRows({ row, folder, onRetried }: { row: RecordRow; folder: FolderCo
         <tr className="fail-extra">
           <td colSpan={3}>
             <span>{failureLine(row.failureClassified, row.failureMessage)}</span>
-            <button className="retry-link" type="button" onClick={() => void reprocessRecord(folder.id, row.externalRecordId).then(onRetried)}>
+            <button
+              className="retry-link"
+              type="button"
+              onClick={() => {
+                void reprocessRecord(folder.id, row.externalRecordId).then(onRetried).catch((error: unknown) => {
+                  onError(error instanceof Error ? error.message : "再試行に失敗しました");
+                });
+              }}
+            >
               再試行
             </button>
           </td>
