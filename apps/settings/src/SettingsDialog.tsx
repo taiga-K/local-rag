@@ -96,6 +96,10 @@ export function SettingsScreen() {
     if (level !== "custom") {
       return;
     }
+    if (thresholdDraftIncomplete(customText)) {
+      setCustomText(savedCustom === null ? "" : savedCustom.toFixed(2));
+      return;
+    }
     const result = commitThresholdText(customText);
     if (!result.ok) {
       return;

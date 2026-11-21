@@ -46,6 +46,8 @@ describe("custom threshold input", () => {
     expect(commitThresholdText("0.834")).toEqual({ ok: true, cents: 83, text: "0.83" });
     expect(commitThresholdText("0.995")).toEqual({ ok: true, cents: 100, text: "1.00" });
     expect(commitThresholdText("1.005").ok).toBe(false);
+    expect(commitThresholdText("0.").ok).toBe(false);
+    expect(commitThresholdText("1.").ok).toBe(false);
     expect(commitThresholdText("abc").ok).toBe(false);
     expect(commitThresholdText("2").ok).toBe(false);
     expect(commitThresholdText("-0.1").ok).toBe(false);

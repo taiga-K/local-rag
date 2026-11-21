@@ -65,7 +65,10 @@ export function thresholdDraftIncomplete(raw: string): boolean {
 
 export function commitThresholdText(raw: string): ThresholdCommit {
   const normalized = normalizeThresholdText(raw);
-  const match = /^(\d+)(?:\.(\d*))?$/.exec(normalized);
+  if (normalized.endsWith(".")) {
+    return { ok: false };
+  }
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(normalized);
   if (!match) {
     return { ok: false };
   }
