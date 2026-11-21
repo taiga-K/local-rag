@@ -273,22 +273,45 @@ section { margin-top: 40px; }
 .toggle.on i { background: var(--accent); }
 .toggle.on i::after { left: auto; right: 4px; }
 .set .wrap { position: relative; }
-.custom-field { display: flex; flex-direction: column; align-items: stretch; gap: 4px; width: 240px; margin-top: 8px; }
-.custom-field input {
+.set .select.threshold-select { width: 192px; }
+.menu.threshold-menu { width: 192px; }
+.threshold-menu .t { white-space: nowrap; }
+.threshold-menu .opt-num { color: #616161; margin-left: 6px; }
+.threshold-child {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) minmax(16px, 1fr) 96px;
+  grid-template-areas: "label gap input" "guide gap input" "note gap .";
+  align-items: start;
+  margin: 4px 0 12px;
+  padding-left: 24px;
+  background: none;
+  border: 0;
+}
+.threshold-child label { grid-area: label; font-size: 14px; line-height: 20px; }
+.threshold-child #threshold-guide { grid-area: guide; margin: 0; font-size: 12px; line-height: 16px; color: #616161; }
+.threshold-child input {
+  grid-area: input;
+  justify-self: end;
+  width: 96px;
   height: 32px;
+  box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 0 12px;
+  padding: 0 8px;
   background: var(--bg);
-  box-sizing: border-box;
 }
-.custom-field .hint, .custom-field .caution, .custom-field .field-error {
-  font-size: 12px;
-  line-height: 16px;
+.threshold-child input[aria-invalid="true"] { border-color: #c42b1c; }
+.threshold-note { grid-area: note; display: flex; gap: 6px; align-items: flex-start; margin: 4px 0 0; font-size: 12px; line-height: 16px; }
+.threshold-note.warn { color: #9d5d00; }
+.threshold-note.err { color: #c42b1c; }
+.threshold-note svg { flex: none; margin-top: 0; }
+@media (max-width: 800px) {
+  .threshold-child {
+    grid-template-columns: 1fr;
+    grid-template-areas: "label" "guide" "input" "note";
+  }
+  .threshold-child input { justify-self: start; }
 }
-.custom-field .hint { color: var(--text-2); }
-.custom-field .caution { color: #9a6700; }
-.custom-field .field-error { color: var(--danger-text); }
 .menu {
   opacity: 1;
   translate: 0 0;

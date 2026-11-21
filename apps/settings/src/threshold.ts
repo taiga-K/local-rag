@@ -26,6 +26,13 @@ export function thresholdWarning(cents: number): string {
   return "";
 }
 
+const LEVEL_SEED = { off: 0.84, weak: 0.8, standard: 0.84, strong: 0.86 } as const;
+
+export function customSeed(previous: keyof typeof LEVEL_SEED, saved: number | null): string {
+  const value = saved ?? LEVEL_SEED[previous];
+  return (Math.round(value * 100) / 100).toFixed(2);
+}
+
 export function formatThreshold(value: number): string {
   const cents = Math.round(value * 100);
   const whole = Math.trunc(cents / 100);

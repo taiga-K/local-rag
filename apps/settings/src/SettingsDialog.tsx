@@ -16,18 +16,18 @@ import { Glyph } from "./glyphs";
 import {
   THRESHOLD_ERROR,
   THRESHOLD_HINT,
-  formatThreshold,
+  customSeed,
   thresholdCents,
   thresholdPartial,
   thresholdWarning,
 } from "./threshold";
 
-const LEVELS: { id: ThresholdLevel; label: string; detail: string }[] = [
-  { id: "off", label: "除かない", detail: "初期値。すべての候補を出します" },
-  { id: "weak", label: "弱く", detail: "類似度 0.80 未満を外す" },
-  { id: "standard", label: "標準", detail: "類似度 0.84 未満を外す" },
-  { id: "strong", label: "強く", detail: "類似度 0.86 未満を外す" },
-  { id: "custom", label: "カスタム", detail: "0〜1の数値を指定します" },
+const LEVELS: { id: ThresholdLevel; label: string; number?: string }[] = [
+  { id: "off", label: "除かない" },
+  { id: "weak", label: "弱く", number: "0.80" },
+  { id: "standard", label: "標準", number: "0.84" },
+  { id: "strong", label: "強く", number: "0.86" },
+  { id: "custom", label: "カスタム" },
 ];
 
 const MODEL_LABELS: Record<string, string> = {
@@ -42,20 +42,28 @@ export function SettingsScreen() {
   const [embedding, setEmbedding] = useState<EmbeddingInfo | null>(null);
   const [level, setLevel] = useState<ThresholdLevel>("off");
   const [customText, setCustomText] = useState("");
+  const [savedCustom, setSavedCustom] = useState<number | null>(null);
   const [menu, setMenu] = useState(false);
   const [menuUp, setMenuUp] = useState(true);
   const [theme, setTheme] = useState<ThemeChoice>("system");
   const [note, setNote] = useState("");
   const levelButton = useRef<HTMLButtonElement>(null);
-  const customSave = useRef<number | null>(null);
+  const customInput = useRef<HTMLInputElement>(null);
+  const customFocus = useRef(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
-  const saveSeq = useRef(0);
+  const saveTicket = useRef(0);
 
   useEffect(() => {
     void Promise.all([loadSettings(), loadRetrieveSettings(), loadEmbedding()]).then(([settings, score, embed]) => {
       setLocal(settings);
       setLevel(score.level);
-      setCustomText(score.level === "custom" && typeof score.value === "number" ? formatThreshold(score.value) : "");
+      const remembered = typeof score.customValue === "number"
+        ? score.customValue
+        : score.level === "custom" && typeof score.value === "number"
+          ? score.value
+          : null;
+      setSavedCustom(remembered);
+      setCustomText(score.level === "custom" && remembered !== null ? remembered.toFixed(2) : "");
       setEmbedding(embed);
     }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "設定を読めません"));
     const stored = window.localStorage.getItem("local-rag-theme");
@@ -75,17 +83,23 @@ export function SettingsScreen() {
     saveQueue.current = run.then(() => undefined, () => undefined);
   }
 
-  function saveCustom(cents: number) {
-    if (customSave.current !== null) {
-      window.clearTimeout(customSave.current);
+  function commitCustom() {
+    const cents = thresholdCents(customText);
+    if (cents === null) {
+      return;
     }
-    const ticket = saveSeq.current;
-    customSave.current = window.setTimeout(() => {
-      if (ticket !== saveSeq.current) {
+    const value = cents / 100;
+    const previous = savedCustom;
+    const ticket = ++saveTicket.current;
+    setSavedCustom(value);
+    setCustomText(value.toFixed(2));
+    enqueueSave({ level: "custom", value }, () => {
+      if (ticket !== saveTicket.current) {
         return;
       }
-      enqueueSave({ level: "custom", value: cents / 100 }, () => undefined);
-    }, 300);
+      setSavedCustom(previous);
+      setCustomText(previous === null ? "" : previous.toFixed(2));
+    });
   }
 
   function chooseLevel(next: ThresholdLevel) {
@@ -94,29 +108,35 @@ export function SettingsScreen() {
       return;
     }
     if (next === "custom") {
+      const previous = level === "custom" ? "off" : level;
+      setCustomText(customSeed(previous, savedCustom));
+      customFocus.current = true;
       setLevel("custom");
-      const cents = thresholdCents(customText);
-      if (cents !== null) {
-        saveCustom(cents);
-      }
       return;
-    }
-    saveSeq.current += 1;
-    if (customSave.current !== null) {
-      window.clearTimeout(customSave.current);
     }
     const previous = level;
     setLevel(next);
     enqueueSave({ level: next }, () => setLevel(previous));
   }
 
+  useEffect(() => {
+    if (level !== "custom" || !customFocus.current) {
+      return;
+    }
+    customFocus.current = false;
+    customInput.current?.focus();
+    customInput.current?.select();
+  }, [level, customText]);
+
   const customCents = thresholdCents(customText);
-  const customError = level === "custom" && customText !== "" && !thresholdPartial(customText) && customCents === null
+  const customError = level === "custom" && customCents === null && customText !== "" && !thresholdPartial(customText)
     ? THRESHOLD_ERROR
     : "";
   const customWarn = level === "custom" && customCents !== null ? thresholdWarning(customCents) : "";
+  const closedValue = customCents !== null ? customText : savedCustom === null ? "" : savedCustom.toFixed(2);
+  const closedLabel = level === "custom" && closedValue !== "" ? `カスタム（${closedValue}）` : (LEVELS.find((item) => item.id === level)?.label ?? "除かない");
+  const describedBy = ["threshold-guide", customError || customWarn ? "threshold-status" : ""].filter(Boolean).join(" ");
 
-  const current = LEVELS.find((item) => item.id === level) ?? LEVELS[0];
   return (
     <div className="col set">
       <h1>設定</h1>
@@ -217,60 +237,68 @@ export function SettingsScreen() {
             <span className="wrap">
               <button
                 ref={levelButton}
-                className="select"
+                className="select threshold-select"
                 type="button"
                 aria-label="関係の薄い文書を除く"
                 onClick={() => {
                   const rect = levelButton.current?.getBoundingClientRect();
                   const below = rect ? window.innerHeight - rect.bottom : 0;
-                  setMenuUp(below < 280);
+                  setMenuUp(below < 220);
                   setMenu((open) => !open);
                 }}
               >
-                <span>{current.label}</span>
+                <span>{closedLabel}</span>
                 {Glyph.down}
               </button>
               {menu ? (
-                <div className={menuUp ? "menu up" : "menu"} role="listbox">
+                <div className={menuUp ? "menu up threshold-menu" : "menu threshold-menu"} role="listbox">
                   {LEVELS.map((item) => (
                     <button key={item.id} className={item.id === level ? "mi on" : "mi"} type="button" onClick={() => chooseLevel(item.id)}>
                       <span className="ck">{item.id === level ? "✓" : ""}</span>
-                      <span>
-                        <span className="t">{item.label}</span>
-                        <span className="dd">{item.detail}</span>
+                      <span className="t">
+                        {item.label}
+                        {item.number ? <span className="opt-num">{item.number}</span> : null}
                       </span>
                     </button>
                   ))}
                 </div>
               ) : null}
-              {level === "custom" ? (
-                <span className="custom-field">
-                  <input
-                    aria-label="しきい値"
-                    inputMode="decimal"
-                    value={customText}
-                    onChange={(event) => {
-                      const text = event.target.value;
-                      setCustomText(text);
-                      const cents = thresholdCents(text);
-                      if (cents === null) {
-                        saveSeq.current += 1;
-                        if (customSave.current !== null) {
-                          window.clearTimeout(customSave.current);
-                        }
-                        return;
-                      }
-                      saveCustom(cents);
-                    }}
-                  />
-                  <span className="hint">{THRESHOLD_HINT}</span>
-                  {customWarn ? <span className="caution" role="status">{customWarn}</span> : null}
-                  {customError ? <span className="field-error" role="alert">{customError}</span> : null}
-                </span>
-              ) : null}
             </span>
           }
         />
+        {level === "custom" ? (
+          <div className="threshold-child">
+            <label htmlFor="threshold-value">しきい値</label>
+            <p id="threshold-guide">{THRESHOLD_HINT}</p>
+            <input
+              ref={customInput}
+              id="threshold-value"
+              inputMode="decimal"
+              aria-invalid={customError !== ""}
+              aria-describedby={describedBy}
+              value={customText}
+              onChange={(event) => setCustomText(event.target.value)}
+              onBlur={commitCustom}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitCustom();
+                }
+              }}
+            />
+            {customWarn ? (
+              <p id="threshold-status" className="threshold-note warn" role="status" aria-live="polite">
+                {Glyph.warn}
+                <span>{customWarn}</span>
+              </p>
+            ) : null}
+            {customError ? (
+              <p id="threshold-status" className="threshold-note err" role="status" aria-live="polite">
+                <span>{customError}</span>
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </section>
       <section>
         <div className="sec-head"><h2>表示</h2></div>

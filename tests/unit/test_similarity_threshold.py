@@ -325,6 +325,8 @@ class _SettingsConn:
             self.row["score_threshold_level"] = params[0]
             self.row["score_threshold_enabled"] = params[1]
             self.row["score_threshold"] = params[2]
+            if params is not None and len(params) > 4 and params[3] == "custom":
+                self.row["score_threshold_custom"] = params[4]
         return _SettingsCursor(self.row)
 
     def commit(self):
@@ -376,14 +378,20 @@ def test_retrieve_settings_round_trip_and_local_body_stays_put():
         assert client.get("/api/v1/settings/retrieve").json() == saved.json()
         custom = client.put("/api/v1/settings/retrieve", json={"level": "custom", "value": 0.83})
         assert custom.status_code == 200
-        assert custom.json() == {"level": "custom", "value": 0.83}
+        assert custom.json() == {"level": "custom", "value": 0.83, "customValue": 0.83}
         assert row["score_threshold_level"] == "custom"
         assert row["score_threshold"] == 0.83
+        assert row["score_threshold_custom"] == 0.83
         assert row["score_threshold_enabled"] is True
         assert client.get("/api/v1/settings/retrieve").json() == custom.json()
         outside = client.put("/api/v1/settings/retrieve", json={"level": "custom", "value": 0.90})
         assert outside.status_code == 200
-        assert outside.json() == {"level": "custom", "value": 0.90}
+        assert outside.json()["value"] == 0.90
+        named = client.put("/api/v1/settings/retrieve", json={"level": "standard"})
+        assert named.status_code == 200
+        assert named.json() == {"level": "standard", "customValue": 0.90}
+        assert row["score_threshold"] == 0.84
+        assert row["score_threshold_custom"] == 0.90
 
 
 @pytest.mark.parametrize(
