@@ -100,7 +100,7 @@ sside+=''.join(f'<div class="nav {"on" if c=="索引" else ""}"><span class="t">
 settings=f'''<div class="col">
 <h1>設定</h1>
 <div class="section" style="margin-top:32px"><div class="sechead"><h2>索引</h2></div>
-<div class="row" style="display:block"><div style="display:flex;gap:24px"><div class="l"><div>埋め込みモデル</div><div class="caption">文書を数値に変える方式です。変えると、すべてのファイルを取り込み直します。</div></div>
+<div class="row" style="display:block"><div style="display:flex;gap:24px"><div class="l"><div>埋め込みモデル</div><div class="caption">取り込み済みのデータがあるあいだは変更できません。モデルが変わると、これまでの索引では検索できなくなるためです。</div></div>
 <div class="c"><span class="select">ruri-v3-130m（軽量）{ic("chev")}</span></div></div>
 <div class="notice"><span style="color:var(--accent);padding-top:2px">{ic("info")}</span><div><div>変更すると<span class="num">480</span>件すべてを取り込み直します。目安は約40分です。</div>
 <div class="acts"><span class="btn primary">変更する</span><span class="btn">キャンセル</span></div></div></div></div>
