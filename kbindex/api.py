@@ -405,8 +405,18 @@ async def _put_embedding(app, request: Request) -> JSONResponse:
         raise PushRefusal(400, "ENVELOPE_INVALID", "model is required.")
     model = model.strip()
     if model == app.state.settings.model:
-        app.state.requested_model = None
         with app.state.db.connect() as conn:
+            row = app_settings_row(conn)
+            pending = row.get("requested_model")
+            if isinstance(pending, str) and pending and pending != model:
+                # The pending save already recreated the collection at the
+                # abandoned dimension. Put the running embedder's size back.
+                try:
+                    app.state.vectors.drop()
+                    app.state.vectors.ensure(int(app.state.embedder.dim))
+                except QdrantUnavailable:
+                    raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Could not recreate the collection.") from None
+            app.state.requested_model = None
             save_requested_model(conn, None)
             conn.commit()
         return JSONResponse({"model": model, "restartRequired": False})

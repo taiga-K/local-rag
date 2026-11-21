@@ -192,7 +192,19 @@ def test_selecting_the_running_model_clears_a_pending_request(monkeypatch):
     assert cleared.status_code == 200
     assert cleared.json()["restartRequired"] is False
     assert store["settings"]["requested_model"] is None
-    assert vectors.dropped == 1
+    assert vectors.dropped == 2
+    assert vectors.ensured == [64, 32]
+
+
+def test_selecting_the_running_model_leaves_an_existing_collection(monkeypatch):
+    vectors = _Vectors(count=3)
+    with _app(vectors, {"busy": False, "queued": []}, _Redis(), monkeypatch) as client:
+        response = client.put(
+            "/api/v1/engineer/embedding",
+            json={"model": client.app.state.settings.model, "dimension": 32},
+        )
+    assert response.status_code == 200
+    assert vectors.dropped == 0
 
 
 def test_model_change_is_not_saved_when_recreate_fails(monkeypatch):
