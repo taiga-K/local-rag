@@ -20,9 +20,13 @@
   --ok: #448361;
   --track: rgba(55, 53, 47, 0.1);
   --text-quiet: #616161;
-  --field-border: rgba(0, 0, 0, 0.06);
-  --field-border-strong: rgba(0, 0, 0, 0.45);
-  --band: rgba(55, 53, 47, 0.04);
+  --card: #ffffffb3;
+  --card-stroke: #0000000f;
+  --card-secondary: #f6f6f680;
+  --field-border: #0000000f;
+  --field-border-strong: #00000072;
+  --field-bg: #ffffffb3;
+  --field-bg-focus: #ffffff;
   --threshold-warn: #9d5d00;
   --threshold-warn-mark: #fff;
   --threshold-err: #c42b1c;
@@ -46,9 +50,13 @@
   --ok: #6ccb5f;
   --track: rgba(240, 239, 237, 0.12);
   --text-quiet: #c5c5c5;
-  --field-border: rgba(255, 255, 255, 0.08);
-  --field-border-strong: rgba(255, 255, 255, 0.545);
-  --band: rgba(255, 255, 255, 0.06);
+  --card: #ffffff0d;
+  --card-stroke: #00000019;
+  --card-secondary: #ffffff08;
+  --field-border: #ffffff12;
+  --field-border-strong: #ffffff8b;
+  --field-bg: #ffffff0f;
+  --field-bg-focus: #1e1e1eb3;
   --threshold-warn: #fce100;
   --threshold-warn-mark: #191919;
   --threshold-err: #ff99a4;
@@ -73,9 +81,13 @@
     --ok: #6ccb5f;
     --track: rgba(240, 239, 237, 0.12);
     --text-quiet: #c5c5c5;
-    --field-border: rgba(255, 255, 255, 0.08);
-    --field-border-strong: rgba(255, 255, 255, 0.545);
-    --band: rgba(255, 255, 255, 0.06);
+    --card: #ffffff0d;
+    --card-stroke: #00000019;
+    --card-secondary: #ffffff08;
+    --field-border: #ffffff12;
+    --field-border-strong: #ffffff8b;
+    --field-bg: #ffffff0f;
+    --field-bg-focus: #1e1e1eb3;
     --threshold-warn: #fce100;
     --threshold-warn-mark: #191919;
     --threshold-err: #ff99a4;
@@ -283,7 +295,17 @@ section { margin-top: 40px; }
 .col.set > section, .col.set > h1 { max-width: 720px; }
 .set section { margin-top: 32px; }
 .control-col { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.set .r { display: flex; align-items: center; gap: 32px; padding: 14px 0; }
+.set section > .r,
+.set section > .threshold-group { margin-top: 4px; }
+.set .r {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--card-stroke);
+  border-radius: 4px;
+}
 .set .grow { flex: 1; min-width: 0; }
 .set .d { display: block; font-size: 12px; line-height: 18px; color: var(--text-2); margin-top: 2px; }
 .select {
@@ -312,20 +334,26 @@ section { margin-top: 40px; }
 .menu.threshold-menu { width: 192px; }
 .threshold-menu .t { white-space: nowrap; }
 .threshold-menu .opt-num { color: var(--text-quiet); margin-left: 6px; }
-.threshold-group.open {
-  background: var(--band);
-  border-radius: 8px;
+.threshold-group.open .r {
+  margin-top: 0;
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
 }
 .threshold-child {
   display: grid;
   grid-template-columns: minmax(0, 360px) minmax(16px, 1fr) 96px;
   grid-template-areas: "label gap input" "guide gap input" "note note note";
   align-items: start;
+  box-sizing: border-box;
+  min-height: 52px;
   margin: 0;
-  padding: 12px 0 14px 24px;
-  background: none;
-  border: 0;
-  border-top: 1px solid var(--line);
+  padding: 8px 44px 8px 58px;
+  background: var(--card-secondary);
+  border-style: solid;
+  border-color: var(--card-stroke);
+  border-width: 0 1px 1px 1px;
+  border-top: 1px solid var(--card-stroke);
+  border-radius: 0 0 4px 4px;
 }
 .threshold-child label { grid-area: label; font-size: 14px; line-height: 20px; }
 .threshold-child #threshold-guide { grid-area: guide; margin: 0; font-size: 12px; line-height: 16px; color: var(--text-quiet); }
@@ -338,14 +366,15 @@ section { margin-top: 40px; }
   border: 1px solid var(--field-border);
   border-bottom-color: var(--field-border-strong);
   border-radius: 4px;
-  padding: 0 8px;
-  background: var(--bg);
+  padding: 5px 6px 6px 10px;
+  background: var(--field-bg);
   outline: none;
 }
 .threshold-child input:focus,
 .threshold-child input:focus-visible {
   border-bottom-width: 2px;
   border-bottom-color: var(--accent);
+  background: var(--field-bg-focus);
   outline: none;
 }
 .threshold-child input[aria-invalid="true"],
@@ -367,7 +396,10 @@ section { margin-top: 40px; }
   display: flex;
   gap: 6px;
   align-items: flex-start;
-  margin: 4px 0 0;
+  box-sizing: border-box;
+  width: calc(100% + 102px);
+  margin: 4px -44px 0 -58px;
+  padding: 0 12px;
   font-size: 12px;
   line-height: 16px;
   word-break: keep-all;
