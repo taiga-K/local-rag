@@ -196,6 +196,21 @@ def test_selecting_the_running_model_clears_a_pending_request(monkeypatch):
     assert vectors.ensured == [64, 32]
 
 
+def test_cancel_keeps_points_written_after_a_same_size_change(monkeypatch):
+    vectors = _Vectors(count=0)
+    store = {"busy": False, "queued": []}
+    with _app(vectors, store, _Redis(), monkeypatch) as client:
+        changed = client.put("/api/v1/engineer/embedding", json={"model": "other", "dimension": 32})
+        assert changed.status_code == 200
+        vectors.count_value = 4
+        running = client.app.state.settings.model
+        cleared = client.put("/api/v1/engineer/embedding", json={"model": running, "dimension": 32})
+    assert cleared.status_code == 200
+    assert store["settings"]["requested_model"] is None
+    assert vectors.dropped == 1
+    assert vectors.count_value == 4
+
+
 def test_selecting_the_running_model_leaves_an_existing_collection(monkeypatch):
     vectors = _Vectors(count=3)
     with _app(vectors, {"busy": False, "queued": []}, _Redis(), monkeypatch) as client:

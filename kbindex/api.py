@@ -409,11 +409,14 @@ async def _put_embedding(app, request: Request) -> JSONResponse:
             row = app_settings_row(conn)
             pending = row.get("requested_model")
             if isinstance(pending, str) and pending and pending != model:
-                # The pending save already recreated the collection at the
-                # abandoned dimension. Put the running embedder's size back.
+                # A pending save recreates an empty collection at the new
+                # dimension. Restore the running size only while it is still
+                # empty. Points written afterward, which happens when the
+                # dimension did not change, stay in place.
                 try:
-                    app.state.vectors.drop()
-                    app.state.vectors.ensure(int(app.state.embedder.dim))
+                    if app.state.vectors.count() == 0:
+                        app.state.vectors.drop()
+                        app.state.vectors.ensure(int(app.state.embedder.dim))
                 except QdrantUnavailable:
                     raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Could not recreate the collection.") from None
             app.state.requested_model = None
