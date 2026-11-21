@@ -14,9 +14,10 @@ import redis
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from kbindex.config import Settings, load_settings, rebuild_enabled
+from kbindex.similarity import CUSTOM_LEVEL, THRESHOLD_LEVELS, custom_threshold
 from kbindex.ingest_ui import failure_fields, pause_deadline, pause_is_active, PAUSE_KINDS
 from kbindex.contract import (
     EXTERNAL_RECORD_ID,
@@ -159,13 +160,33 @@ class PauseIn(BaseModel):
 class RetrieveSettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     level: str
+    value: float | None = None
 
     @field_validator("level")
     @classmethod
     def _known_level(cls, value: str) -> str:
-        if value not in {"off", "weak", "standard", "strong"}:
-            raise ValueError("level must be off, weak, standard, or strong")
+        known = set(THRESHOLD_LEVELS) | {CUSTOM_LEVEL}
+        if value not in known:
+            raise ValueError("level must be off, weak, standard, strong, or custom")
         return value
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _numeric_value(cls, value: object) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("value must be a number")
+        return float(value)
+
+    @model_validator(mode="after")
+    def _custom_value(self) -> RetrieveSettingsIn:
+        if self.level == CUSTOM_LEVEL:
+            if custom_threshold(self.value) is None:
+                raise ValueError("value must be from 0 to 1 with at most two decimal places")
+        elif self.value is not None:
+            raise ValueError("value is only used when level is custom")
+        return self
 
 
 class KeywordIn(BaseModel):
@@ -801,7 +822,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except (ValidationError, json.JSONDecodeError):
             raise PushRefusal(400, "ENVELOPE_INVALID", "The retrieve settings body is invalid.") from None
         with app.state.db.connect() as conn:
-            row = save_score_level(conn, payload.level)
+            row = save_score_level(conn, payload.level, payload.value)
             conn.commit()
         return JSONResponse(score_threshold_payload(row))
 
