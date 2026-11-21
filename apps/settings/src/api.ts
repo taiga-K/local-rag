@@ -68,6 +68,7 @@ export type ThresholdLevel = "off" | "weak" | "standard" | "strong" | "custom";
 export type RetrieveSettings = {
   level: ThresholdLevel;
   value?: number;
+  customValue?: number;
 };
 
 async function send(path: string, method: string, body?: unknown): Promise<unknown> {

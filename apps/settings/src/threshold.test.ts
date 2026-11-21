@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatThreshold, thresholdCents, thresholdPartial, thresholdWarning } from "./threshold";
+import { customSeed, formatThreshold, thresholdCents, thresholdPartial, thresholdWarning } from "./threshold";
 
 describe("custom threshold input", () => {
   it("accepts 0 to 1 with at most two decimal places", () => {
@@ -26,6 +26,13 @@ describe("custom threshold input", () => {
     expect(thresholdWarning(86)).toBe("");
     expect(thresholdWarning(79)).not.toBe("");
     expect(thresholdWarning(90)).toContain("目安の範囲外");
+  });
+
+  it("seeds custom from the previous level unless a custom value was saved", () => {
+    expect(customSeed("off", null)).toBe("0.84");
+    expect(customSeed("weak", null)).toBe("0.80");
+    expect(customSeed("strong", null)).toBe("0.86");
+    expect(customSeed("off", 0.9)).toBe("0.90");
   });
 
   it("formats a loaded number without a third decimal", () => {

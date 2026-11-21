@@ -165,6 +165,7 @@ ALTERS = (
     "alter table app_settings add column if not exists pause_kind text",
     "alter table app_settings add column if not exists requested_device text",
     "alter table app_settings add column if not exists score_threshold_level text",
+    "alter table app_settings add column if not exists score_threshold_custom double precision",
     "alter table app_settings add column if not exists keyword_enabled boolean not null default true",
     """
     create table if not exists record_activity (
@@ -471,9 +472,13 @@ def score_threshold_payload(row: dict[str, Any]) -> dict[str, Any]:
         enabled=bool(row.get("score_threshold_enabled")),
         stored=stored,
     )
-    if level != "custom":
-        return {"level": level}
-    return {"level": level, "value": custom_threshold(stored)}
+    body: dict[str, Any] = {"level": level}
+    if level == "custom":
+        body["value"] = custom_threshold(stored)
+    remembered = custom_threshold(row.get("score_threshold_custom"))
+    if remembered is not None:
+        body["customValue"] = remembered
+    return body
 
 
 def read_score_threshold(conn) -> tuple[bool, float]:
@@ -499,10 +504,13 @@ def save_score_level(conn, level: str, value: float | None = None) -> dict[str, 
     conn.execute(
         """
         update app_settings
-        set score_threshold_level = %s, score_threshold_enabled = %s, score_threshold = %s
+        set score_threshold_level = %s,
+            score_threshold_enabled = %s,
+            score_threshold = %s,
+            score_threshold_custom = case when %s = 'custom' then %s else score_threshold_custom end
         where id = 1
         """,
-        (level, enabled, stored),
+        (level, enabled, stored, level, stored if level == "custom" else None),
     )
     return app_settings_row(conn)
 

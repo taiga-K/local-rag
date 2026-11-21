@@ -64,6 +64,13 @@ export const Glyph = {
       <rect x="9.3" y="3.5" width="2.2" height="9" rx=".6" />
     </svg>
   ),
+  warn: (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8.86 2.4a1 1 0 0 0-1.72 0L1.2 13.1a1 1 0 0 0 .86 1.5h11.88a1 1 0 0 0 .86-1.5z" />
+      <path d="M8 6.1v3.4" stroke="#fff" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="8" cy="11.5" r=".8" fill="#fff" />
+    </svg>
+  ),
   down: (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
       <path d="m3 4.5 3 3 3-3" />
