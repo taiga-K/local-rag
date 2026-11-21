@@ -300,7 +300,15 @@ section { margin-top: 40px; }
   padding: 0 8px;
   background: var(--bg);
 }
-.threshold-child input[aria-invalid="true"] { border-color: #c42b1c; }
+.threshold-child input[aria-invalid="true"],
+.threshold-child input[aria-invalid="true"]:hover,
+.threshold-child input[aria-invalid="true"]:focus,
+.threshold-child input[aria-invalid="true"]:focus-visible,
+.threshold-child input[aria-invalid="true"]:active {
+  border: 2px solid #c42b1c;
+  outline: 2px solid #c42b1c;
+  outline-offset: 2px;
+}
 .threshold-note { grid-area: note; display: flex; gap: 6px; align-items: flex-start; margin: 4px 0 0; font-size: 12px; line-height: 16px; }
 .threshold-note.warn { color: #9d5d00; }
 .threshold-note.err { color: #c42b1c; }
