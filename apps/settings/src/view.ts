@@ -45,31 +45,17 @@ export function showsAdminControls(): false {
 
 const QDRANT_UNAVAILABLE = "検索用のデータベースに接続できませんでした。local-rag を起動し直してから、再試行してください。";
 const NO_STORED_FAILURE = "このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。";
-const ONE_NOTE = "この形式（.one）には対応していません。OneNote から PDF か Word で書き出すと取り込めます。";
-const TIMED_OUT = "読み込みに時間がかかりすぎたため中断しました。しばらくしてから再試行してください。";
 const LEGACY_NO_STORED = "原因が記録されていません。再試行しても失敗する場合はファイルを開けるか確かめてください。";
+const SHORT_LABELS: Record<string, string> = {
+  [QDRANT_UNAVAILABLE]: "データベースに接続できません",
+  "この形式（.one）には対応していません。OneNote から PDF か Word で書き出すと取り込めます。": "対応していない形式（.one）",
+  "読み込みに時間がかかりすぎたため中断しました。しばらくしてから再試行してください。": "読み込みが時間切れ",
+};
 
-function isTimeout(text: string): boolean {
-  return /timeout/i.test(text);
-}
-
-function isOneNote(name: string | undefined, text: string, classified: boolean): boolean {
-  if (!name || !name.toLowerCase().endsWith(".one")) {
-    return false;
-  }
-  return !classified || !text || text === "INDEX_FAILED" || text === LEGACY_NO_STORED;
-}
-
-export function failureLine(classified: boolean, message: string | null, name?: string): string {
+export function failureLine(classified: boolean, message: string | null, _name?: string): string {
   const text = (message ?? "").trim();
   if (text === "QDRANT_UNAVAILABLE") {
     return QDRANT_UNAVAILABLE;
-  }
-  if (isTimeout(text)) {
-    return TIMED_OUT;
-  }
-  if (isOneNote(name, text, classified)) {
-    return ONE_NOTE;
   }
   if (!classified || !text || text === "INDEX_FAILED" || text === LEGACY_NO_STORED) {
     return NO_STORED_FAILURE;
@@ -79,17 +65,8 @@ export function failureLine(classified: boolean, message: string | null, name?: 
 }
 
 export function failureShort(classified: boolean, message: string | null, name?: string): string {
-  const text = (message ?? "").trim();
-  if (text === "QDRANT_UNAVAILABLE") {
-    return "データベースに接続できません";
-  }
-  if (isTimeout(text)) {
-    return "読み込みが時間切れ";
-  }
-  if (isOneNote(name, text, classified)) {
-    return "対応していない形式（.one）";
-  }
-  return "読み込めませんでした";
+  const text = failureLine(classified, message, name);
+  return SHORT_LABELS[text] ?? (text.length <= 18 ? text : `${Array.from(text).slice(0, 16).join("")}…`);
 }
 
 export function remainingOf(row: { queued: number; active: number }): number {

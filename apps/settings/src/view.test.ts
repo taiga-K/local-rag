@@ -102,8 +102,8 @@ describe("settings view", () => {
   it("maps only the two known failure sentences", () => {
     expect(failureLine(true, "QDRANT_UNAVAILABLE")).toBe("検索用のデータベースに接続できませんでした。local-rag を起動し直してから、再試行してください。");
     expect(failureLine(false, null)).toBe("このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。");
-    expect(failureLine(true, "INDEX_FAILED", "定例メモ 10月.one")).toBe("この形式（.one）には対応していません。OneNote から PDF か Word で書き出すと取り込めます。");
-    expect(failureLine(true, "TimeoutError: read timed out")).toBe("読み込みに時間がかかりすぎたため中断しました。しばらくしてから再試行してください。");
+    expect(failureLine(true, "INDEX_FAILED", "定例メモ 10月.one")).toBe("このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。");
+    expect(failureLine(true, "TimeoutError: read timed out")).toBe("TimeoutError: read timed out");
     expect(failureLine(true, "あ".repeat(161))).toHaveLength(160);
     expect(statusBarLabel({ active: 1, queued: 346 })).toBe("残り347件");
     expect(statusBarLabel({ active: 0, queued: 0 })).toBe("すべて取り込み済み");

@@ -21,6 +21,36 @@
   color-scheme: light;
 }
 
+:root[data-theme="dark"] {
+  --text: #f0efed;
+  --text-2: #c8c6c2;
+  --text-3: #9b9a97;
+  --bg: #191919;
+  --bg-side: #252525;
+  --hover: rgba(240, 239, 237, 0.06);
+  --selected: rgba(240, 239, 237, 0.08);
+  --line: #383836;
+  --line-soft: #383836;
+  --track: rgba(240, 239, 237, 0.12);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --text: #f0efed;
+    --text-2: #c8c6c2;
+    --text-3: #9b9a97;
+    --bg: #191919;
+    --bg-side: #252525;
+    --hover: rgba(240, 239, 237, 0.06);
+    --selected: rgba(240, 239, 237, 0.08);
+    --line: #383836;
+    --line-soft: #383836;
+    --track: rgba(240, 239, 237, 0.12);
+    color-scheme: dark;
+  }
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
@@ -96,7 +126,7 @@ section { margin-top: 40px; }
   border-radius: 6px;
   border: 1px solid var(--line);
   border-bottom-color: rgba(55, 53, 47, 0.2);
-  background: #fff;
+  background: var(--bg);
   color: var(--text);
   white-space: nowrap;
 }
@@ -200,7 +230,7 @@ section { margin-top: 40px; }
   top: 38px;
   z-index: 5;
   width: 360px;
-  background: #fff;
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(15, 15, 15, 0.12);
@@ -217,6 +247,7 @@ section { margin-top: 40px; }
 .more { display: grid; grid-template-columns: 24px 1fr; column-gap: 8px; height: 36px; align-items: center; padding: 0 8px; }
 .col.set > section, .col.set > h1 { max-width: 720px; }
 .set section { margin-top: 32px; }
+.control-col { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .set .r { display: flex; align-items: center; gap: 32px; padding: 14px 0; }
 .set .grow { flex: 1; min-width: 0; }
 .set .d { display: block; font-size: 12px; line-height: 18px; color: var(--text-2); margin-top: 2px; }
@@ -231,7 +262,7 @@ section { margin-top: 40px; }
   border: 1px solid var(--line);
   border-bottom-color: rgba(55, 53, 47, 0.2);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg);
   white-space: nowrap;
   flex: none;
 }
@@ -250,7 +281,7 @@ section { margin-top: 40px; }
   right: 0;
   top: 36px;
   width: 280px;
-  background: #fff;
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(15, 15, 15, 0.12);

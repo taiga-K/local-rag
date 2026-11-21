@@ -4,6 +4,7 @@ import {
   loadRetrieveSettings,
   loadSettings,
   saveDevice,
+  saveEmbeddingModel,
   saveKeyword,
   saveRetrieveSettings,
   saveSettings,
@@ -251,21 +252,56 @@ function ModelSelect({
   embedding: EmbeddingInfo;
   onError: (message: string) => void;
 }) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [dimension, setDimension] = useState("");
   const label = (id: string) => MODEL_LABELS[id] ?? id;
+  const typed = Number(dimension);
+  const dimensionOk = Number.isInteger(typed) && typed >= 1;
   return (
-    <Select
-      value={embedding.model}
-      options={embedding.models.map((item) => ({ value: item, label: label(item) }))}
-      onChange={(next) => {
-        if (next === embedding.model) {
-          return;
-        }
-        if ((embedding.pointCount ?? 0) > 0) {
-          onError("点が残っているあいだ、モデルは変えられません。");
-          return;
-        }
-        onError("新しいモデルの次元を入れてから、再起動してください。");
-      }}
-    />
+    <span className="control-col">
+      <Select
+        value={pending ?? embedding.model}
+        options={embedding.models.map((item) => ({ value: item, label: label(item) }))}
+        onChange={(next) => {
+          if (next === embedding.model) {
+            setPending(null);
+            return;
+          }
+          if ((embedding.pointCount ?? 0) > 0) {
+            onError("点が残っているあいだ、モデルは変えられません。");
+            return;
+          }
+          setPending(next);
+          onError("新しいモデルの次元を入れてください。再起動すると反映されます。");
+        }}
+      />
+      {pending ? (
+        <span className="pair">
+          <input
+            className="select"
+            style={{ width: 96 }}
+            aria-label="新しいモデルの次元"
+            inputMode="numeric"
+            placeholder="次元"
+            value={dimension}
+            onChange={(event) => setDimension(event.target.value)}
+          />
+          <button
+            className="btn sm"
+            type="button"
+            disabled={!dimensionOk}
+            onClick={() => {
+              void saveEmbeddingModel(pending, typed).then(() => {
+                setPending(null);
+                setDimension("");
+                onError("再起動すると反映されます。");
+              }).catch((error: unknown) => onError(error instanceof Error ? error.message : "変更できませんでした"));
+            }}
+          >
+            変更する
+          </button>
+        </span>
+      ) : null}
+    </span>
   );
 }

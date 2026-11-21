@@ -78,8 +78,8 @@ def _seed() -> dict:
         notes.append(_record("notes", _realistic(index), "COMPLETED", None, 2000 + index))
     notes.append(_record("notes", "2026-11 営業会議 議事録.docx", "IN_PROGRESS", None, 10))
     notes.append(_record("notes", "2026年度 予算申請書.pdf", "FAILED", "QDRANT_UNAVAILABLE", 11))
-    notes.append(_record("notes", "定例メモ 10月.one", "FAILED", "INDEX_FAILED", 12))
-    notes.append(_record("notes", "顧客打合せ_A社_0827.docx", "FAILED", "TimeoutError: read timed out", 13))
+    notes.append(_record("notes", "定例メモ 10月.one", "FAILED", "この形式（.one）には対応していません。OneNote から PDF か Word で書き出すと取り込めます。", 12))
+    notes.append(_record("notes", "顧客打合せ_A社_0827.docx", "FAILED", "読み込みに時間がかかりすぎたため中断しました。しばらくしてから再試行してください。", 13))
     for index in range(346):
         notes.append(_record("notes", _realistic(index + 20), "QUEUED", None, 3000 + index))
     notes[134]["recordName"] = "品質会議 議事録 2026年9月.pdf"

@@ -544,7 +544,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _commit_push(app, kb_id, body, envelope)
 
     @app.delete("/api/v1/kb/{kb_id}/records/{external_record_id}")
-    def delete_record(kb_id: str, external_record_id: str) -> JSONResponse:
+    def delete_record(kb_id: str, external_record_id: str, source: str | None = None) -> JSONResponse:
         _require_postgres(app)
         _require_redis(app)
         rid = record_id_for(kb_id, external_record_id)
@@ -579,7 +579,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _restore_record(app, snapshot, index_snap, points)
             _restore_files(snapshot, old_raw, old_stored)
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
-        if snapshot["indexing_status"] in {"COMPLETED", "EMPTY"} or snapshot.get("has_indexed_copy"):
+        if source == "sync" and (snapshot["indexing_status"] in {"COMPLETED", "EMPTY"} or snapshot.get("has_indexed_copy")):
             with app.state.db.connect() as conn:
                 note_indexed_removal(conn, kb_id=kb_id, record_name=snapshot["record_name"])
                 conn.commit()

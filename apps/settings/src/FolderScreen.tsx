@@ -74,14 +74,13 @@ export function FolderScreen({
       <div className="head">
         <h1>{folder.name}</h1>
         <div className="actions">
-          {path ? (
+          {path && folderBridge() ? (
             <button
               className="btn"
               type="button"
               onClick={() => {
                 const bridge = folderBridge();
                 if (!bridge) {
-                  setNote("この画面からはフォルダを開けません");
                   return;
                 }
                 void bridge.openPath(path).then((result) => {
@@ -140,7 +139,15 @@ export function FolderScreen({
                 <span className="ic bad">{Glyph.errSmall}</span>
                 <span className="gt">失敗</span>
                 <span className="gn">{failed.length}</span>
-                <button className="btn" type="button" onClick={() => void retryFailed().then(() => onReload())}>すべて再試行</button>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    void retryFailed().then(() => loadRecords(folder.id).then(setRecords)).then(() => onReload());
+                  }}
+                >
+                  すべて再試行
+                </button>
               </div>
               {failed.map((row) => (
                 <FileLine key={row.recordId} row={row} folder={folder} failed onChanged={() => void loadRecords(folder.id).then(setRecords)} />
