@@ -12,10 +12,16 @@ from qdrant_client.http import models as qm
 
 from kbindex.api import create_app
 from kbindex.config import load_settings
-from kbindex.db import ALTERS, NAMESPACE, score_threshold_payload
+from kbindex.db import ALTERS, NAMESPACE, read_score_threshold, score_threshold_payload
 from kbindex.pipeline import Engine
 from kbindex.qdrant_store import QdrantUnavailable, Vectors
-from kbindex.similarity import DEFAULT_SCORE_THRESHOLD, apply_score_threshold, cosine
+from kbindex.similarity import (
+    DEFAULT_SCORE_THRESHOLD,
+    THRESHOLD_LEVELS,
+    apply_score_threshold,
+    cosine,
+    custom_threshold,
+)
 
 
 def test_cosine_divides_by_the_norms():
@@ -46,6 +52,7 @@ def test_unset_threshold_is_off():
 
 
 def test_an_old_number_maps_to_the_nearest_level():
+    assert THRESHOLD_LEVELS["strong"] == 0.86
     assert score_threshold_payload(
         {"score_threshold_enabled": True, "score_threshold": 0.84, "score_threshold_level": None}
     ) == {"level": "standard"}
@@ -53,8 +60,33 @@ def test_an_old_number_maps_to_the_nearest_level():
         {"score_threshold_enabled": True, "score_threshold": 0.81, "score_threshold_level": None}
     ) == {"level": "weak"}
     assert score_threshold_payload(
+        {"score_threshold_enabled": True, "score_threshold": 0.85, "score_threshold_level": None}
+    ) == {"level": "standard"}
+    assert score_threshold_payload(
+        {"score_threshold_enabled": True, "score_threshold": 0.88, "score_threshold_level": None}
+    ) == {"level": "strong"}
+    assert score_threshold_payload(
         {"score_threshold_enabled": False, "score_threshold": 0.88, "score_threshold_level": None}
     ) == {"level": "off"}
+    assert score_threshold_payload(
+        {"score_threshold_enabled": True, "score_threshold": 0.90, "score_threshold_level": None}
+    ) == {"level": "strong"}
+
+
+def test_custom_keeps_its_number_and_rejects_a_third_decimal():
+    assert custom_threshold(0.83) == 0.83
+    assert custom_threshold(0) == 0
+    assert custom_threshold(1) == 1
+    assert custom_threshold(0.836) is None
+    assert custom_threshold(1.01) is None
+    assert custom_threshold(True) is None
+    saved = score_threshold_payload(
+        {"score_threshold_enabled": True, "score_threshold": 0.90, "score_threshold_level": "custom"}
+    )
+    assert saved == {"level": "custom", "value": 0.90}
+    assert score_threshold_payload(
+        {"score_threshold_enabled": True, "score_threshold": 0.88, "score_threshold_level": "strong"}
+    ) == {"level": "strong"}
 
 
 class _KeywordCursor:
@@ -175,6 +207,61 @@ def test_enabled_drops_low_and_missing_vectors_before_the_limit(monkeypatch):
     assert found["chunks"][0]["similarity"] == pytest.approx(0.6)
 
 
+def test_search_applies_a_saved_custom_threshold(monkeypatch):
+    monkeypatch.setattr("kbindex.pipeline.query_terms", lambda _query: ["語"])
+    monkeypatch.setattr(
+        "kbindex.pipeline.bm25_rows",
+        lambda _conn, tokenizer, _terms, kb_ids=None: (
+            {"doc_count": 3},
+            [{"term": "語", "df": 1}],
+            [{"term": "語", "chunk_id": "only", "tf": 1.0}],
+        ),
+    )
+    monkeypatch.setattr("kbindex.pipeline.hydrate_chunks", lambda _conn, ids: _rows(ids))
+
+    class _RowConn:
+        def __init__(self, row):
+            self.row = row
+
+        def execute(self, _sql, _params=None):
+            return _SettingsCursor(self.row)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _RowDB:
+        def __init__(self, row):
+            self.row = row
+
+        def connect(self):
+            return _RowConn(self.row)
+
+    custom = {
+        "score_threshold_level": "custom",
+        "score_threshold_enabled": True,
+        "score_threshold": 0.50,
+        "keyword_enabled": True,
+    }
+    assert read_score_threshold(_RowConn(custom)) == (True, 0.50)
+    engine = Engine(load_settings(), _RowDB(custom), _Vectors(_STORED), _Embed())
+    found = engine.search("質問", limit=10, kb_ids=None, max_per_record=None, bounds={})
+    assert [chunk["id"] for chunk in found["chunks"]] == ["only", "high"]
+
+    named = {
+        "score_threshold_level": "strong",
+        "score_threshold_enabled": True,
+        "score_threshold": 0.88,
+        "keyword_enabled": True,
+    }
+    assert read_score_threshold(_RowConn(named)) == (True, 0.86)
+    strong = Engine(load_settings(), _RowDB(named), _Vectors(_STORED), _Embed())
+    dropped = strong.search("質問", limit=10, kb_ids=None, max_per_record=None, bounds={})
+    assert [chunk["id"] for chunk in dropped["chunks"]] == ["high"]
+
+
 def test_enabled_returns_empty_when_every_candidate_is_below(monkeypatch):
     stored = {"low": [0.0, 1.0], "only": [0.0, 1.0], "high": [0.0, 1.0]}
     found, _embed, _vectors = _search(monkeypatch, enabled=True, threshold=0.5, stored=stored)
@@ -285,7 +372,18 @@ def test_retrieve_settings_round_trip_and_local_body_stays_put():
         saved = client.put("/api/v1/settings/retrieve", json={"level": "strong"})
         assert saved.status_code == 200
         assert saved.json() == {"level": "strong"}
+        assert row["score_threshold"] == 0.86
         assert client.get("/api/v1/settings/retrieve").json() == saved.json()
+        custom = client.put("/api/v1/settings/retrieve", json={"level": "custom", "value": 0.83})
+        assert custom.status_code == 200
+        assert custom.json() == {"level": "custom", "value": 0.83}
+        assert row["score_threshold_level"] == "custom"
+        assert row["score_threshold"] == 0.83
+        assert row["score_threshold_enabled"] is True
+        assert client.get("/api/v1/settings/retrieve").json() == custom.json()
+        outside = client.put("/api/v1/settings/retrieve", json={"level": "custom", "value": 0.90})
+        assert outside.status_code == 200
+        assert outside.json() == {"level": "custom", "value": 0.90}
 
 
 @pytest.mark.parametrize(
@@ -294,6 +392,11 @@ def test_retrieve_settings_round_trip_and_local_body_stays_put():
         {"level": "medium"},
         {"level": 1},
         {"level": "off", "scoreThreshold": 0.5},
+        {"level": "custom"},
+        {"level": "custom", "value": 0.836},
+        {"level": "custom", "value": 1.2},
+        {"level": "custom", "value": -0.01},
+        {"level": "strong", "value": 0.86},
         {},
     ],
 )

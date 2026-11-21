@@ -10,7 +10,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from kbindex.similarity import resolve_threshold_level, threshold_for_level
+from kbindex.similarity import custom_threshold, resolve_threshold_level, threshold_for_level
 
 NAMESPACE = uuid.UUID("c3a1e5b0-7d2e-4b1a-9f60-4a0b1c2d3e4f")
 
@@ -459,30 +459,50 @@ def save_requested_model(conn, model: str | None) -> dict[str, Any]:
     return app_settings_row(conn)
 
 
-def score_threshold_payload(row: dict[str, Any]) -> dict[str, str]:
-    """The saved level. Numbers are resolved from the level constants at read time."""
+def score_threshold_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """The saved level. Named numbers come from the level constants.
+
+    Custom also returns the stored cutoff. Older numeric rows stay on the
+    nearest named level and do not become custom.
+    """
+    stored = None if row.get("score_threshold") is None else float(row["score_threshold"])
     level = resolve_threshold_level(
         row.get("score_threshold_level"),
         enabled=bool(row.get("score_threshold_enabled")),
-        stored=None if row.get("score_threshold") is None else float(row["score_threshold"]),
+        stored=stored,
     )
-    return {"level": level}
+    if level != "custom":
+        return {"level": level}
+    return {"level": level, "value": custom_threshold(stored)}
 
 
 def read_score_threshold(conn) -> tuple[bool, float]:
-    level = score_threshold_payload(app_settings_row(conn))["level"]
-    return threshold_for_level(level)
+    row = app_settings_row(conn)
+    stored = None if row.get("score_threshold") is None else float(row["score_threshold"])
+    level = resolve_threshold_level(
+        row.get("score_threshold_level"),
+        enabled=bool(row.get("score_threshold_enabled")),
+        stored=stored,
+    )
+    return threshold_for_level(level, stored)
 
 
-def save_score_level(conn, level: str) -> dict[str, Any]:
-    enabled, number = threshold_for_level(level)
+def save_score_level(conn, level: str, value: float | None = None) -> dict[str, Any]:
+    if level == "custom":
+        number = custom_threshold(value)
+        if number is None:
+            raise ValueError("custom threshold is invalid")
+        enabled, stored = True, number
+    else:
+        enabled, number = threshold_for_level(level)
+        stored = None if level == "off" else number
     conn.execute(
         """
         update app_settings
         set score_threshold_level = %s, score_threshold_enabled = %s, score_threshold = %s
         where id = 1
         """,
-        (level, enabled, None if level == "off" else number),
+        (level, enabled, stored),
     )
     return app_settings_row(conn)
 
