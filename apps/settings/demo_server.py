@@ -300,11 +300,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, STATE["retrieve"])
                 return
             if path == "/api/v1/engineer/embedding":
+                chosen = payload.get("model")
+                if chosen == STATE["embedding"]["model"]:
+                    STATE["embedding"]["requestedModel"] = None
+                    self._send(200, {**_embedding_public(), "restartRequired": False})
+                    return
                 if _point_count() > 0:
                     self._send(400, {"error": {"reason": "MODEL_CHANGE_REFUSED", "message": "The collection still has points."}})
                     return
-                STATE["embedding"]["model"] = payload["model"]
-                STATE["embedding"]["requestedModel"] = payload["model"]
+                STATE["embedding"]["requestedModel"] = chosen
+                if chosen not in STATE["embedding"]["models"]:
+                    STATE["embedding"]["models"].append(chosen)
                 self._send(200, {**_embedding_public(), "restartRequired": True})
                 return
             if path == "/api/v1/engineer/keyword":

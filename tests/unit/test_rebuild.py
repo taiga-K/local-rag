@@ -181,6 +181,20 @@ def test_model_change_recreates_an_empty_collection(monkeypatch):
     assert response.json()["restartRequired"] is True
 
 
+def test_selecting_the_running_model_clears_a_pending_request(monkeypatch):
+    vectors = _Vectors(count=0)
+    store = {"busy": False, "queued": []}
+    with _app(vectors, store, _Redis(), monkeypatch) as client:
+        changed = client.put("/api/v1/engineer/embedding", json={"model": "other", "dimension": 64})
+        assert changed.status_code == 200
+        running = client.app.state.settings.model
+        cleared = client.put("/api/v1/engineer/embedding", json={"model": running, "dimension": 32})
+    assert cleared.status_code == 200
+    assert cleared.json()["restartRequired"] is False
+    assert store["settings"]["requested_model"] is None
+    assert vectors.dropped == 1
+
+
 def test_model_change_is_not_saved_when_recreate_fails(monkeypatch):
     vectors = _Vectors(count=0, fail_ensure=True)
     with _app(vectors, {"busy": False, "queued": []}, _Redis(), monkeypatch) as client:

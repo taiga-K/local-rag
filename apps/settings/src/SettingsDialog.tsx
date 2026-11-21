@@ -98,10 +98,18 @@ export function SettingsScreen() {
                 <ModelSelect
                   embedding={embedding}
                   onError={setNote}
-                  onSaved={(model) => setEmbedding({
-                    ...embedding,
-                    requestedModel: model,
-                    models: embedding.models.includes(model) ? embedding.models : [...embedding.models, model],
+                  onSaved={(model) => setEmbedding((current) => {
+                    if (!current) {
+                      return current;
+                    }
+                    if (!model || model === current.model) {
+                      return { ...current, requestedModel: null };
+                    }
+                    return {
+                      ...current,
+                      requestedModel: model,
+                      models: current.models.includes(model) ? current.models : [...current.models, model],
+                    };
                   })}
                 />
               }
@@ -115,9 +123,9 @@ export function SettingsScreen() {
                   options={embedding.devices.map((item) => ({ value: item, label: item === "cpu" ? "CPU" : "GPU" }))}
                   onChange={(next) => {
                     const previous = embedding.requestedDevice || embedding.device;
-                    setEmbedding({ ...embedding, requestedDevice: next });
+                    setEmbedding((current) => (current ? { ...current, requestedDevice: next } : current));
                     void saveDevice(next).catch((error: unknown) => {
-                      setEmbedding({ ...embedding, requestedDevice: previous });
+                      setEmbedding((current) => (current ? { ...current, requestedDevice: previous } : current));
                       setNote(error instanceof Error ? error.message : "変更できませんでした");
                     });
                   }}
@@ -132,9 +140,9 @@ export function SettingsScreen() {
                   on={embedding.keywordEnabled !== false}
                   onChange={(next) => {
                     const previous = embedding.keywordEnabled !== false;
-                    setEmbedding({ ...embedding, keywordEnabled: next });
+                    setEmbedding((current) => (current ? { ...current, keywordEnabled: next } : current));
                     void saveKeyword(next).catch((error: unknown) => {
-                      setEmbedding({ ...embedding, keywordEnabled: previous });
+                      setEmbedding((current) => (current ? { ...current, keywordEnabled: previous } : current));
                       setNote(error instanceof Error ? error.message : "保存に失敗しました");
                     });
                   }}
@@ -262,7 +270,7 @@ function ModelSelect({
 }: {
   embedding: EmbeddingInfo;
   onError: (message: string) => void;
-  onSaved: (model: string) => void;
+  onSaved: (model: string | null) => void;
 }) {
   const [pending, setPending] = useState<string | null>(null);
   const [dimension, setDimension] = useState("");
@@ -277,6 +285,12 @@ function ModelSelect({
         onChange={(next) => {
           if (next === embedding.model) {
             setPending(null);
+            if (embedding.requestedModel && embedding.requestedModel !== embedding.model) {
+              void saveEmbeddingModel(embedding.model, embedding.dimension).then(() => {
+                onSaved(null);
+                onError("");
+              }).catch((error: unknown) => onError(error instanceof Error ? error.message : "変更できませんでした"));
+            }
             return;
           }
           if ((embedding.pointCount ?? 0) > 0) {

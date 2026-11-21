@@ -405,6 +405,10 @@ async def _put_embedding(app, request: Request) -> JSONResponse:
         raise PushRefusal(400, "ENVELOPE_INVALID", "model is required.")
     model = model.strip()
     if model == app.state.settings.model:
+        app.state.requested_model = None
+        with app.state.db.connect() as conn:
+            save_requested_model(conn, None)
+            conn.commit()
         return JSONResponse({"model": model, "restartRequired": False})
     try:
         count = app.state.vectors.count()

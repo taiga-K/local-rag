@@ -454,7 +454,7 @@ def save_upload_limit(conn, max_upload_bytes: int) -> dict[str, Any]:
     return app_settings_row(conn)
 
 
-def save_requested_model(conn, model: str) -> dict[str, Any]:
+def save_requested_model(conn, model: str | None) -> dict[str, Any]:
     conn.execute("update app_settings set requested_model = %s where id = 1", (model,))
     return app_settings_row(conn)
 
