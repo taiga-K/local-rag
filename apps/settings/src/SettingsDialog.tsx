@@ -94,7 +94,17 @@ export function SettingsScreen() {
             <Row
               name="埋め込みモデル"
               desc="変えると、すべてのファイルを取り込み直します。"
-              control={<ModelSelect embedding={embedding} onError={setNote} />}
+              control={
+                <ModelSelect
+                  embedding={embedding}
+                  onError={setNote}
+                  onSaved={(model) => setEmbedding({
+                    ...embedding,
+                    requestedModel: model,
+                    models: embedding.models.includes(model) ? embedding.models : [...embedding.models, model],
+                  })}
+                />
+              }
             />
             <Row
               name="計算に使う装置"
@@ -248,9 +258,11 @@ function Select({
 function ModelSelect({
   embedding,
   onError,
+  onSaved,
 }: {
   embedding: EmbeddingInfo;
   onError: (message: string) => void;
+  onSaved: (model: string) => void;
 }) {
   const [pending, setPending] = useState<string | null>(null);
   const [dimension, setDimension] = useState("");
@@ -260,7 +272,7 @@ function ModelSelect({
   return (
     <span className="control-col">
       <Select
-        value={pending ?? embedding.model}
+        value={pending ?? embedding.requestedModel ?? embedding.model}
         options={embedding.models.map((item) => ({ value: item, label: label(item) }))}
         onChange={(next) => {
           if (next === embedding.model) {
@@ -292,6 +304,7 @@ function ModelSelect({
             disabled={!dimensionOk}
             onClick={() => {
               void saveEmbeddingModel(pending, typed).then(() => {
+                onSaved(pending);
                 setPending(null);
                 setDimension("");
                 onError("再起動すると反映されます。");
