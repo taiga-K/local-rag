@@ -93,7 +93,7 @@ export function SettingsScreen() {
           <>
             <Row
               name="埋め込みモデル"
-              desc="変えると、すべてのファイルを取り込み直します。"
+              desc="取り込み済みのデータがあるあいだは変更できません。モデルが変わると、これまでの索引では検索できなくなるためです。"
               control={
                 <ModelSelect
                   embedding={embedding}
