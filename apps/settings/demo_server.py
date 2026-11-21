@@ -82,16 +82,24 @@ def _seed() -> dict:
     notes.append(_record("notes", "顧客打合せ_A社_0827.docx", "FAILED", "TimeoutError: read timed out", 13))
     for index in range(346):
         notes.append(_record("notes", _realistic(index + 20), "QUEUED", None, 3000 + index))
+    notes[134]["recordName"] = "品質会議 議事録 2026年9月.pdf"
+    notes[135]["recordName"] = "顧客打合せ_C社_0904.docx"
+    notes[136]["recordName"] = "部長会 メモ 2026-09-30.docx"
     specs = [_record("specs", f"仕様書_{index + 1}.md", "COMPLETED", None, 4000 + index) for index in range(4)]
     return {
-        "local": {"folders": ["/tmp/local-rag-demo/議事録"], "includeSubfolders": True, "autoIndex": True},
-        "retrieve": {"scoreThresholdEnabled": False, "scoreThreshold": 0.84},
+        "local": {
+            "folders": [r"C:\Users\taiga\Documents\議事録", r"C:\Users\taiga\Documents\仕様書"],
+            "includeSubfolders": True,
+            "autoIndex": True,
+        },
+        "retrieve": {"level": "off"},
         "embedding": {
             "model": "cl-nagoya/ruri-v3-310m",
             "device": "cpu",
             "requestedModel": None,
             "requestedDevice": None,
             "keyword": "fastembed",
+            "keywordEnabled": True,
             "dimension": 768,
             "models": ["cl-nagoya/ruri-v3-310m", "cl-nagoya/ruri-v3-130m"],
             "devices": ["cpu", "cuda"],
@@ -173,8 +181,9 @@ def _summary(now: datetime) -> dict:
         "failed": sum(item["failed"] for item in folders),
         "held": sum(item["held"] for item in folders),
         "reindexCount": sum(1 for rows in STATE["records"].values() for row in rows if row["indexingStatus"] != "EMPTY"),
-        "latestAt": latest,
+        "latestAt": "2026-11-20T23:30:00Z" if not any(item["active"] or item["queued"] for item in folders) else latest,
         "current": current,
+        "etaText": "あと約20分" if sum(item["active"] for item in folders) or sum(item["queued"] for item in folders) else None,
         "pause": {"active": active, "kind": pause["kind"], "until": None if until is None else until.strftime("%Y-%m-%dT%H:%M:%SZ")},
         "folders": [{key: value for key, value in item.items() if key != "done"} for item in folders],
     }
@@ -232,25 +241,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, _embedding_public())
                 return
             if path == "/api/v1/ingest/activity":
-                events = []
-                for kb_id, rows in STATE["records"].items():
-                    for row in rows:
-                        if row["indexingStatus"] in {"QUEUED"}:
-                            continue
-                        events.append((
-                            row["updatedAt"],
-                            STATE["folders"][kb_id],
-                            row["recordName"],
-                            row["indexingStatus"],
-                            activity_sentence(row["recordName"], row["indexingStatus"]),
-                        ))
-                events.sort(reverse=True)
+                events = [
+                    ("2026-11-20T13:51:00Z", "議事録", "2026-11 定例議事録.pdf", "更新"),
+                    ("2026-11-20T13:40:00Z", "議事録", "営業週報_2026-11-14.docx", "追加"),
+                    ("2026-11-20T13:12:00Z", "仕様書", "API仕様 v3.docx", "追加"),
+                    ("2026-11-20T12:58:00Z", "仕様書", "API仕様 v2（旧）.docx", "削除"),
+                    ("2026-11-20T09:20:00Z", "議事録", "経営会議 議事録 2026年10月期.pdf", "更新"),
+                    ("2026-11-20T04:05:00Z", "議事録", "顧客打合せ_B社_1118.docx", "追加"),
+                    ("2026-11-20T00:41:00Z", "仕様書", "導入手順_社内ポータル.pdf", "更新"),
+                    ("2026-11-20T00:12:00Z", "議事録", "採用面談メモ_中途_11月.docx", "追加"),
+                ]
                 limit = 50 if "limit=50" in self.path else 8
                 self._send(200, {
-                    "hasMore": len(events) > limit,
+                    "hasMore": False,
                     "events": [
-                        {"at": at, "folder": folder, "name": name, "status": status, "text": text}
-                        for at, folder, name, status, text in events[:limit]
+                        {"at": at, "folder": folder, "name": name, "kind": kind, "text": kind}
+                        for at, folder, name, kind in events[:limit]
                     ],
                 })
                 return
@@ -300,6 +306,10 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["embedding"]["model"] = payload["model"]
                 STATE["embedding"]["requestedModel"] = payload["model"]
                 self._send(200, {**_embedding_public(), "restartRequired": True})
+                return
+            if path == "/api/v1/engineer/keyword":
+                STATE["embedding"]["keywordEnabled"] = bool(payload.get("enabled"))
+                self._send(200, _embedding_public())
                 return
             if path == "/api/v1/engineer/device":
                 STATE["embedding"]["requestedDevice"] = payload["device"]

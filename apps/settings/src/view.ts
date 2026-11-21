@@ -45,18 +45,55 @@ export function showsAdminControls(): false {
 
 const QDRANT_UNAVAILABLE = "検索用のデータベースに接続できませんでした。local-rag を起動し直してから、再試行してください。";
 const NO_STORED_FAILURE = "このファイルを読み込めませんでした。ファイルが開けるか確かめてから、再試行してください。";
+const ONE_NOTE = "この形式（.one）には対応していません。OneNote から PDF か Word で書き出すと取り込めます。";
+const TIMED_OUT = "読み込みに時間がかかりすぎたため中断しました。しばらくしてから再試行してください。";
 const LEGACY_NO_STORED = "原因が記録されていません。再試行しても失敗する場合はファイルを開けるか確かめてください。";
 
-export function failureLine(classified: boolean, message: string | null): string {
+function isTimeout(text: string): boolean {
+  return /timeout/i.test(text);
+}
+
+function isOneNote(name: string | undefined, text: string, classified: boolean): boolean {
+  if (!name || !name.toLowerCase().endsWith(".one")) {
+    return false;
+  }
+  return !classified || !text || text === "INDEX_FAILED" || text === LEGACY_NO_STORED;
+}
+
+export function failureLine(classified: boolean, message: string | null, name?: string): string {
   const text = (message ?? "").trim();
   if (text === "QDRANT_UNAVAILABLE") {
     return QDRANT_UNAVAILABLE;
+  }
+  if (isTimeout(text)) {
+    return TIMED_OUT;
+  }
+  if (isOneNote(name, text, classified)) {
+    return ONE_NOTE;
   }
   if (!classified || !text || text === "INDEX_FAILED" || text === LEGACY_NO_STORED) {
     return NO_STORED_FAILURE;
   }
   const chars = Array.from(text);
   return chars.length <= 160 ? text : chars.slice(0, 160).join("");
+}
+
+export function failureShort(classified: boolean, message: string | null, name?: string): string {
+  const text = (message ?? "").trim();
+  if (text === "QDRANT_UNAVAILABLE") {
+    return "データベースに接続できません";
+  }
+  if (isTimeout(text)) {
+    return "読み込みが時間切れ";
+  }
+  if (isOneNote(name, text, classified)) {
+    return "対応していない形式（.one）";
+  }
+  return "読み込めませんでした";
+}
+
+export function remainingOf(row: { queued: number; active: number }): number {
+  return row.queued + row.active;
 }
 
 export function statusLabel(status: string): string {

@@ -39,6 +39,7 @@ export type Summary = {
   held?: number;
   reindexCount: number;
   latestAt: string | null;
+  etaText?: string | null;
   current: { recordName: string; kbId: string; kbName: string } | null;
   pause: { active: boolean; kind: string | null; until: string | null };
   folders: FolderCount[];
@@ -46,7 +47,7 @@ export type Summary = {
 
 export type Activity = {
   hasMore: boolean;
-  events: { at: string | null; folder: string; text: string; name?: string; status?: string }[];
+  events: { at: string | null; folder: string; text: string; name?: string; kind?: string; status?: string }[];
 };
 
 export type EmbeddingInfo = {
@@ -55,15 +56,17 @@ export type EmbeddingInfo = {
   requestedModel: string | null;
   requestedDevice: string | null;
   keyword: string;
+  keywordEnabled?: boolean;
   dimension: number;
   pointCount: number | null;
   models: string[];
   devices: string[];
 };
 
+export type ThresholdLevel = "off" | "weak" | "standard" | "strong";
+
 export type RetrieveSettings = {
-  scoreThresholdEnabled: boolean;
-  scoreThreshold: number;
+  level: ThresholdLevel;
 };
 
 async function send(path: string, method: string, body?: unknown): Promise<unknown> {
@@ -163,4 +166,8 @@ export function saveEmbeddingModel(
 
 export function saveDevice(device: string): Promise<unknown> {
   return send("/api/v1/engineer/device", "PUT", { device });
+}
+
+export function saveKeyword(enabled: boolean): Promise<EmbeddingInfo> {
+  return send("/api/v1/engineer/keyword", "PUT", { enabled }) as Promise<EmbeddingInfo>;
 }

@@ -10,7 +10,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from kbindex.similarity import DEFAULT_SCORE_THRESHOLD
+from kbindex.similarity import resolve_threshold_level, threshold_for_level
 
 NAMESPACE = uuid.UUID("c3a1e5b0-7d2e-4b1a-9f60-4a0b1c2d3e4f")
 
@@ -164,6 +164,17 @@ ALTERS = (
     "alter table app_settings add column if not exists pause_until timestamptz",
     "alter table app_settings add column if not exists pause_kind text",
     "alter table app_settings add column if not exists requested_device text",
+    "alter table app_settings add column if not exists score_threshold_level text",
+    "alter table app_settings add column if not exists keyword_enabled boolean not null default true",
+    """
+    create table if not exists record_activity (
+      id bigserial primary key,
+      happened_at timestamptz not null default now(),
+      kb_name text not null,
+      record_name text not null,
+      kind text not null
+    )
+    """,
     "alter table records add column if not exists has_indexed_copy boolean not null default false",
     "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
@@ -448,28 +459,30 @@ def save_requested_model(conn, model: str) -> dict[str, Any]:
     return app_settings_row(conn)
 
 
-def score_threshold_payload(row: dict[str, Any]) -> dict[str, bool | float]:
-    """Enabled flag and the effective threshold. Null uses the one constant."""
-    raw = row["score_threshold"]
-    return {
-        "scoreThresholdEnabled": bool(row["score_threshold_enabled"]),
-        "scoreThreshold": DEFAULT_SCORE_THRESHOLD if raw is None else float(raw),
-    }
+def score_threshold_payload(row: dict[str, Any]) -> dict[str, str]:
+    """The saved level. Numbers are resolved from the level constants at read time."""
+    level = resolve_threshold_level(
+        row.get("score_threshold_level"),
+        enabled=bool(row.get("score_threshold_enabled")),
+        stored=None if row.get("score_threshold") is None else float(row["score_threshold"]),
+    )
+    return {"level": level}
 
 
 def read_score_threshold(conn) -> tuple[bool, float]:
-    body = score_threshold_payload(app_settings_row(conn))
-    return bool(body["scoreThresholdEnabled"]), float(body["scoreThreshold"])
+    level = score_threshold_payload(app_settings_row(conn))["level"]
+    return threshold_for_level(level)
 
 
-def save_score_threshold(conn, *, enabled: bool, threshold: float) -> dict[str, Any]:
+def save_score_level(conn, level: str) -> dict[str, Any]:
+    enabled, number = threshold_for_level(level)
     conn.execute(
         """
         update app_settings
-        set score_threshold_enabled = %s, score_threshold = %s
+        set score_threshold_level = %s, score_threshold_enabled = %s, score_threshold = %s
         where id = 1
         """,
-        (enabled, threshold),
+        (level, enabled, None if level == "off" else number),
     )
     return app_settings_row(conn)
 
@@ -479,6 +492,11 @@ def save_pause(conn, *, kind: str | None, until) -> dict[str, Any]:
         "update app_settings set pause_kind = %s, pause_until = %s where id = 1",
         (kind, until),
     )
+    return app_settings_row(conn)
+
+
+def save_keyword_enabled(conn, enabled: bool) -> dict[str, Any]:
+    conn.execute("update app_settings set keyword_enabled = %s where id = 1", (enabled,))
     return app_settings_row(conn)
 
 
@@ -568,15 +586,34 @@ def latest_record_update(conn):
     return conn.execute("select max(updated_at) as updated_at from records").fetchone()
 
 
+def note_indexed_removal(conn, *, kb_id: str, record_name: str) -> None:
+    """A searchable document left the folder and the index. Counts drop with the row."""
+    conn.execute(
+        """
+        insert into record_activity (kb_name, record_name, kind)
+        select coalesce(k.name, %s), %s, '削除'
+        from (select %s::text as id) wanted
+        left join knowledge_bases k on k.id = wanted.id
+        """,
+        (kb_id, record_name, kb_id),
+    )
+
+
 def recent_record_events(conn, limit: int) -> list[dict[str, Any]]:
     return list(
         conn.execute(
             """
-            select r.record_name, r.indexing_status, r.updated_at, k.name as kb_name
-            from records r
-            join knowledge_bases k on k.id = r.kb_id
-            where r.indexing_status <> 'QUEUED'
-            order by r.updated_at desc
+            select record_name, kb_name, updated_at, kind from (
+              select r.record_name, k.name as kb_name, r.updated_at,
+                     case when r.version > 1 then '更新' else '追加' end as kind
+              from records r
+              join knowledge_bases k on k.id = r.kb_id
+              where r.indexing_status in ('COMPLETED', 'EMPTY')
+              union all
+              select record_name, kb_name, happened_at, kind
+              from record_activity
+            ) events
+            order by updated_at desc
             limit %s
             """,
             (limit,),

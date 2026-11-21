@@ -12,6 +12,36 @@ from collections.abc import Mapping, Sequence
 
 DEFAULT_SCORE_THRESHOLD = 0.84
 
+# weak and strong are provisional. They have not been checked against real queries.
+THRESHOLD_LEVELS: dict[str, float | None] = {
+    "off": None,
+    "weak": 0.80,
+    "standard": DEFAULT_SCORE_THRESHOLD,
+    "strong": 0.88,
+}
+
+
+def nearest_threshold_level(number: float) -> str:
+    """Map a stored number onto a level. A tie keeps the lower number."""
+    named = [(name, value) for name, value in THRESHOLD_LEVELS.items() if value is not None]
+    return min(named, key=lambda item: (abs(item[1] - number), item[1]))[0]
+
+
+def resolve_threshold_level(level: str | None, *, enabled: bool, stored: float | None) -> str:
+    """A saved level wins. An older numeric row maps to the nearest level. Unset is off."""
+    if level in THRESHOLD_LEVELS:
+        return str(level)
+    if not enabled or stored is None:
+        return "off"
+    return nearest_threshold_level(float(stored))
+
+
+def threshold_for_level(level: str) -> tuple[bool, float]:
+    value = THRESHOLD_LEVELS[level]
+    if value is None:
+        return False, float(THRESHOLD_LEVELS["standard"])
+    return True, float(value)
+
 
 def cosine(query: Sequence[float], stored: Sequence[float]) -> float | None:
     """Real cosine. None when the lengths differ. A zero vector is 0.

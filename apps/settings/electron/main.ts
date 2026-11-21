@@ -52,8 +52,8 @@ function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    minWidth: 1024,
+    minHeight: 700,
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
