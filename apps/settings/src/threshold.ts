@@ -1,7 +1,20 @@
+import type { ThresholdLevel } from "./api";
+
+export const THRESHOLD_ROW_NAME = "関係の薄い文書を除く";
+export const THRESHOLD_ROW_DESC = "質問と似ていない文書を検索結果から外します。";
+export const THRESHOLD_LABEL = "しきい値";
 export const THRESHOLD_HINT = "目安: 0.80〜0.86。高いほど結果が減ります。";
 export const THRESHOLD_WARN =
   "目安の範囲外です。0.75未満ではほとんど除かれず、0.86を超えると関係のある文書も多く除かれます。";
 export const THRESHOLD_ERROR = "0から1まで、小数第2位までの数値を入れてください。";
+
+export const THRESHOLD_OPTIONS: { id: ThresholdLevel; label: string; number?: string }[] = [
+  { id: "off", label: "除かない" },
+  { id: "weak", label: "弱く", number: "0.80" },
+  { id: "standard", label: "標準", number: "0.84" },
+  { id: "strong", label: "強く", number: "0.86" },
+  { id: "custom", label: "カスタム" },
+];
 
 const GUIDE_LOW = 80;
 const GUIDE_HIGH = 86;

@@ -16,19 +16,15 @@ import { Glyph } from "./glyphs";
 import {
   THRESHOLD_ERROR,
   THRESHOLD_HINT,
+  THRESHOLD_LABEL,
+  THRESHOLD_OPTIONS,
+  THRESHOLD_ROW_DESC,
+  THRESHOLD_ROW_NAME,
   customSeed,
   thresholdCents,
   thresholdPartial,
   thresholdWarning,
 } from "./threshold";
-
-const LEVELS: { id: ThresholdLevel; label: string; number?: string }[] = [
-  { id: "off", label: "除かない" },
-  { id: "weak", label: "弱く", number: "0.80" },
-  { id: "standard", label: "標準", number: "0.84" },
-  { id: "strong", label: "強く", number: "0.86" },
-  { id: "custom", label: "カスタム" },
-];
 
 const MODEL_LABELS: Record<string, string> = {
   "cl-nagoya/ruri-v3-310m": "ruri v3（日本語向け・標準）",
@@ -133,8 +129,7 @@ export function SettingsScreen() {
     ? THRESHOLD_ERROR
     : "";
   const customWarn = level === "custom" && customCents !== null ? thresholdWarning(customCents) : "";
-  const closedValue = customCents !== null ? customText : savedCustom === null ? "" : savedCustom.toFixed(2);
-  const closedLabel = level === "custom" && closedValue !== "" ? `カスタム（${closedValue}）` : (LEVELS.find((item) => item.id === level)?.label ?? "除かない");
+  const closedLabel = THRESHOLD_OPTIONS.find((item) => item.id === level)?.label ?? THRESHOLD_OPTIONS[0].label;
   const describedBy = ["threshold-guide", customError || customWarn ? "threshold-status" : ""].filter(Boolean).join(" ");
 
   return (
@@ -230,16 +225,17 @@ export function SettingsScreen() {
       </section>
       <section>
         <div className="sec-head"><h2>検索結果</h2></div>
+        <div className={level === "custom" ? "threshold-group open" : "threshold-group"}>
         <Row
-          name="関係の薄い文書を除く"
-          desc="質問と似ていない文書を検索結果から外します。"
+          name={THRESHOLD_ROW_NAME}
+          desc={THRESHOLD_ROW_DESC}
           control={
             <span className="wrap">
               <button
                 ref={levelButton}
                 className="select threshold-select"
                 type="button"
-                aria-label="関係の薄い文書を除く"
+                aria-label={THRESHOLD_ROW_NAME}
                 onClick={() => {
                   const rect = levelButton.current?.getBoundingClientRect();
                   const below = rect ? window.innerHeight - rect.bottom : 0;
@@ -252,7 +248,7 @@ export function SettingsScreen() {
               </button>
               {menu ? (
                 <div className={menuUp ? "menu up threshold-menu" : "menu threshold-menu"} role="listbox">
-                  {LEVELS.map((item) => (
+                  {THRESHOLD_OPTIONS.map((item) => (
                     <button key={item.id} className={item.id === level ? "mi on" : "mi"} type="button" onClick={() => chooseLevel(item.id)}>
                       <span className="ck">{item.id === level ? "✓" : ""}</span>
                       <span className="t">
@@ -268,7 +264,7 @@ export function SettingsScreen() {
         />
         {level === "custom" ? (
           <div className="threshold-child">
-            <label htmlFor="threshold-value">しきい値</label>
+            <label htmlFor="threshold-value">{THRESHOLD_LABEL}</label>
             <p id="threshold-guide">{THRESHOLD_HINT}</p>
             <input
               ref={customInput}
@@ -299,6 +295,7 @@ export function SettingsScreen() {
             ) : null}
           </div>
         ) : null}
+        </div>
       </section>
       <section>
         <div className="sec-head"><h2>表示</h2></div>
