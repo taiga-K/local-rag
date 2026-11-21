@@ -51,6 +51,7 @@ export function SettingsScreen() {
   const customInput = useRef<HTMLInputElement>(null);
   const customFocus = useRef(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const saveTicket = useRef(0);
 
   useEffect(() => {
     void Promise.all([loadSettings(), loadRetrieveSettings(), loadEmbedding()]).then(([settings, score, embed]) => {
@@ -89,9 +90,13 @@ export function SettingsScreen() {
     }
     const value = cents / 100;
     const previous = savedCustom;
+    const ticket = ++saveTicket.current;
     setSavedCustom(value);
     setCustomText(value.toFixed(2));
     enqueueSave({ level: "custom", value }, () => {
+      if (ticket !== saveTicket.current) {
+        return;
+      }
       setSavedCustom(previous);
       setCustomText(previous === null ? "" : previous.toFixed(2));
     });
@@ -263,21 +268,8 @@ export function SettingsScreen() {
         />
         {level === "custom" ? (
           <div className="threshold-child">
-            <div className="threshold-copy">
-              <label htmlFor="threshold-value">しきい値</label>
-              <p id="threshold-guide">{THRESHOLD_HINT}</p>
-              {customWarn ? (
-                <p id="threshold-status" className="threshold-note warn" role="status" aria-live="polite">
-                  {Glyph.warn}
-                  <span>{customWarn}</span>
-                </p>
-              ) : null}
-              {customError ? (
-                <p id="threshold-status" className="threshold-note err" role="status" aria-live="polite">
-                  <span>{customError}</span>
-                </p>
-              ) : null}
-            </div>
+            <label htmlFor="threshold-value">しきい値</label>
+            <p id="threshold-guide">{THRESHOLD_HINT}</p>
             <input
               ref={customInput}
               id="threshold-value"
@@ -294,6 +286,17 @@ export function SettingsScreen() {
                 }
               }}
             />
+            {customWarn ? (
+              <p id="threshold-status" className="threshold-note warn" role="status" aria-live="polite">
+                {Glyph.warn}
+                <span>{customWarn}</span>
+              </p>
+            ) : null}
+            {customError ? (
+              <p id="threshold-status" className="threshold-note err" role="status" aria-live="polite">
+                <span>{customError}</span>
+              </p>
+            ) : null}
           </div>
         ) : null}
       </section>

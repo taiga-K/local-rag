@@ -274,7 +274,7 @@ section { margin-top: 40px; }
 .toggle.on i::after { left: auto; right: 4px; }
 .set .wrap { position: relative; }
 .set .select.threshold-select { width: 192px; }
-.threshold-menu { width: 192px; }
+.menu.threshold-menu { width: 192px; }
 .threshold-menu .t { white-space: nowrap; }
 .threshold-menu .opt-num { color: #616161; margin-left: 6px; }
 .threshold-child {
