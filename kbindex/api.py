@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import uuid
@@ -18,7 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from kbindex.config import Settings, load_settings, rebuild_enabled
-from kbindex.ingest_ui import activity_sentence, failure_fields, pause_deadline, pause_is_active, PAUSE_KINDS
+from kbindex.ingest_ui import failure_fields, pause_deadline, pause_is_active, PAUSE_KINDS
 from kbindex.contract import (
     EXTERNAL_RECORD_ID,
     MAX_BODY_BYTES,
@@ -43,10 +42,12 @@ from kbindex.db import (
     queue_kb_records,
     recent_record_events,
     save_pause,
+    save_keyword_enabled,
     save_requested_device,
     save_local_settings,
     save_requested_model,
-    save_score_threshold,
+    note_indexed_removal,
+    save_score_level,
     save_upload_limit,
     score_threshold_payload,
     delete_chunks_for,
@@ -157,18 +158,19 @@ class PauseIn(BaseModel):
 
 class RetrieveSettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    scoreThresholdEnabled: bool
-    scoreThreshold: float = Field(ge=-1, le=1)
+    level: str
 
-    @field_validator("scoreThreshold", mode="before")
+    @field_validator("level")
     @classmethod
-    def _finite_threshold(cls, value: object) -> float:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("scoreThreshold must be a number")
-        number = float(value)
-        if not math.isfinite(number):
-            raise ValueError("scoreThreshold must be finite")
-        return number
+    def _known_level(cls, value: str) -> str:
+        if value not in {"off", "weak", "standard", "strong"}:
+            raise ValueError("level must be off, weak, standard, or strong")
+        return value
+
+
+class KeywordIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: bool
 
 
 _RECORD_STATUSES = {
@@ -403,6 +405,23 @@ async def _put_embedding(app, request: Request) -> JSONResponse:
         raise PushRefusal(400, "ENVELOPE_INVALID", "model is required.")
     model = model.strip()
     if model == app.state.settings.model:
+        with app.state.db.connect() as conn:
+            row = app_settings_row(conn)
+            pending = row.get("requested_model")
+            if isinstance(pending, str) and pending and pending != model:
+                # A pending save recreates an empty collection at the new
+                # dimension. Restore the running size only while it is still
+                # empty. Points written afterward, which happens when the
+                # dimension did not change, stay in place.
+                try:
+                    if app.state.vectors.count() == 0:
+                        app.state.vectors.drop()
+                        app.state.vectors.ensure(int(app.state.embedder.dim))
+                except QdrantUnavailable:
+                    raise PushRefusal(503, "QDRANT_UNAVAILABLE", "Could not recreate the collection.") from None
+            app.state.requested_model = None
+            save_requested_model(conn, None)
+            conn.commit()
         return JSONResponse({"model": model, "restartRequired": False})
     try:
         count = app.state.vectors.count()
@@ -542,7 +561,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _commit_push(app, kb_id, body, envelope)
 
     @app.delete("/api/v1/kb/{kb_id}/records/{external_record_id}")
-    def delete_record(kb_id: str, external_record_id: str) -> JSONResponse:
+    def delete_record(kb_id: str, external_record_id: str, source: str | None = None) -> JSONResponse:
         _require_postgres(app)
         _require_redis(app)
         rid = record_id_for(kb_id, external_record_id)
@@ -577,6 +596,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _restore_record(app, snapshot, index_snap, points)
             _restore_files(snapshot, old_raw, old_stored)
             raise PushRefusal(503, "REDIS_UNAVAILABLE", "Redis is unavailable.") from None
+        if source == "sync" and (snapshot["indexing_status"] in {"COMPLETED", "EMPTY"} or snapshot.get("has_indexed_copy")):
+            with app.state.db.connect() as conn:
+                note_indexed_removal(conn, kb_id=kb_id, record_name=snapshot["record_name"])
+                conn.commit()
         return JSONResponse({"deleted": True, "recordId": str(rid), "externalRecordId": external_record_id})
 
     @app.get("/api/v1/kb/{kb_id}/records/{external_record_id}")
@@ -778,11 +801,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except (ValidationError, json.JSONDecodeError):
             raise PushRefusal(400, "ENVELOPE_INVALID", "The retrieve settings body is invalid.") from None
         with app.state.db.connect() as conn:
-            row = save_score_threshold(
-                conn,
-                enabled=payload.scoreThresholdEnabled,
-                threshold=payload.scoreThreshold,
-            )
+            row = save_score_level(conn, payload.level)
             conn.commit()
         return JSONResponse(score_threshold_payload(row))
 
@@ -806,6 +825,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         body = _embedding_body(app, row)
         body["restartRequired"] = True
         return JSONResponse(body)
+
+    @app.put("/api/v1/engineer/keyword")
+    async def put_keyword(request: Request) -> JSONResponse:
+        try:
+            payload = KeywordIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The keyword body is invalid.") from None
+        with app.state.db.connect() as conn:
+            row = save_keyword_enabled(conn, payload.enabled)
+            conn.commit()
+        return JSONResponse(_embedding_body(app, row))
 
     @app.get("/api/v1/ingest/summary")
     def ingest_summary() -> JSONResponse:
@@ -909,8 +939,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "at": _iso_z(row["updated_at"]),
                         "folder": row["kb_name"],
                         "name": row["record_name"],
-                        "status": row["indexing_status"],
-                        "text": activity_sentence(row["record_name"], row["indexing_status"]),
+                        "kind": row["kind"],
+                        "text": row["kind"],
                     }
                     for row in shown
                 ],
@@ -1357,6 +1387,7 @@ def _embedding_body(app, row) -> dict:
         "requestedModel": requested,
         "requestedDevice": row.get("requested_device"),
         "keyword": "fastembed",
+        "keywordEnabled": bool(row.get("keyword_enabled", True)),
         "dimension": int(app.state.embedder.dim),
         "pointCount": _point_count(app),
         "models": models,

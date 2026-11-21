@@ -40,13 +40,32 @@ def test_default_threshold_is_the_single_constant():
     assert "0.84" not in "\n".join(ALTERS)
 
 
-def test_null_column_follows_the_constant(monkeypatch):
-    monkeypatch.setattr("kbindex.db.DEFAULT_SCORE_THRESHOLD", 0.25)
+def test_unset_threshold_is_off():
     body = score_threshold_payload({"score_threshold_enabled": False, "score_threshold": None})
-    assert body == {"scoreThresholdEnabled": False, "scoreThreshold": 0.25}
+    assert body == {"level": "off"}
+
+
+def test_an_old_number_maps_to_the_nearest_level():
+    assert score_threshold_payload(
+        {"score_threshold_enabled": True, "score_threshold": 0.84, "score_threshold_level": None}
+    ) == {"level": "standard"}
+    assert score_threshold_payload(
+        {"score_threshold_enabled": True, "score_threshold": 0.81, "score_threshold_level": None}
+    ) == {"level": "weak"}
+    assert score_threshold_payload(
+        {"score_threshold_enabled": False, "score_threshold": 0.88, "score_threshold_level": None}
+    ) == {"level": "off"}
+
+
+class _KeywordCursor:
+    def fetchone(self):
+        return {"keyword_enabled": True}
 
 
 class _Conn:
+    def execute(self, _sql, _params=None):
+        return _KeywordCursor()
+
     def __enter__(self):
         return self
 
@@ -216,8 +235,9 @@ class _SettingsConn:
     def execute(self, sql, params=None):
         text = " ".join(sql.split())
         if text.startswith("update app_settings"):
-            self.row["score_threshold_enabled"] = params[0]
-            self.row["score_threshold"] = params[1]
+            self.row["score_threshold_level"] = params[0]
+            self.row["score_threshold_enabled"] = params[1]
+            self.row["score_threshold"] = params[2]
         return _SettingsCursor(self.row)
 
     def commit(self):
@@ -259,27 +279,22 @@ def test_retrieve_settings_round_trip_and_local_body_stays_put():
     with _settings_client(row) as client:
         got = client.get("/api/v1/settings/retrieve")
         assert got.status_code == 200
-        assert got.json() == {"scoreThresholdEnabled": False, "scoreThreshold": 0.84}
+        assert got.json() == {"level": "off"}
         local = client.get("/api/v1/settings/local")
         assert local.json() == {"folders": ["/data/notes"], "includeSubfolders": True, "autoIndex": True}
-        saved = client.put(
-            "/api/v1/settings/retrieve",
-            json={"scoreThresholdEnabled": True, "scoreThreshold": 1},
-        )
+        saved = client.put("/api/v1/settings/retrieve", json={"level": "strong"})
         assert saved.status_code == 200
-        assert saved.json() == {"scoreThresholdEnabled": True, "scoreThreshold": 1.0}
+        assert saved.json() == {"level": "strong"}
         assert client.get("/api/v1/settings/retrieve").json() == saved.json()
 
 
 @pytest.mark.parametrize(
     "body",
     [
-        {"scoreThresholdEnabled": True, "scoreThreshold": 1.1},
-        {"scoreThresholdEnabled": True, "scoreThreshold": -1.1},
-        {"scoreThresholdEnabled": True, "scoreThreshold": True},
-        {"scoreThresholdEnabled": True, "scoreThreshold": "0.5"},
-        {"scoreThresholdEnabled": True},
-        {"scoreThresholdEnabled": True, "scoreThreshold": 0.5, "limit": 10},
+        {"level": "medium"},
+        {"level": 1},
+        {"level": "off", "scoreThreshold": 0.5},
+        {},
     ],
 )
 def test_retrieve_settings_reject_a_bad_body(body):

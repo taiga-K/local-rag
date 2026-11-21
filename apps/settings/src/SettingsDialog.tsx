@@ -5,377 +5,330 @@ import {
   loadSettings,
   saveDevice,
   saveEmbeddingModel,
+  saveKeyword,
   saveRetrieveSettings,
   saveSettings,
   type EmbeddingInfo,
   type LocalSettings,
-  type RetrieveSettings,
+  type ThresholdLevel,
 } from "./api";
+import { Glyph } from "./glyphs";
 
-const CATS = ["取り込み", "索引", "検索結果", "表示"] as const;
-const OTHER_MODEL = "__other__";
-type Cat = (typeof CATS)[number];
+const LEVELS: { id: ThresholdLevel; label: string; detail: string }[] = [
+  { id: "off", label: "除かない", detail: "初期値。すべての候補を出します" },
+  { id: "weak", label: "弱く", detail: "類似度 0.80 未満を外す" },
+  { id: "standard", label: "標準", detail: "類似度 0.84 未満を外す" },
+  { id: "strong", label: "強く", detail: "類似度 0.88 未満を外す" },
+];
+
+const MODEL_LABELS: Record<string, string> = {
+  "cl-nagoya/ruri-v3-310m": "ruri v3（日本語向け・標準）",
+  "cl-nagoya/ruri-v3-130m": "ruri v3（日本語向け・軽量）",
+};
+
 type ThemeChoice = "system" | "light" | "dark";
 
-export function SettingsDialog({
-  onClose,
-}: {
-  onClose: () => void;
-}) {
-  const [cat, setCat] = useState<Cat>("検索結果");
+export function SettingsScreen() {
   const [local, setLocal] = useState<LocalSettings | null>(null);
-  const [retrieve, setRetrieve] = useState<RetrieveSettings | null>(null);
   const [embedding, setEmbedding] = useState<EmbeddingInfo | null>(null);
-  const [model, setModel] = useState("");
-  const [device, setDevice] = useState("");
+  const [level, setLevel] = useState<ThresholdLevel>("off");
+  const [menu, setMenu] = useState(false);
+  const [menuUp, setMenuUp] = useState(true);
   const [theme, setTheme] = useState<ThemeChoice>("system");
-  const [notice, setNotice] = useState<"model" | "device" | null>(null);
   const [note, setNote] = useState("");
-  const [open, setOpen] = useState(false);
-  const [thresholdText, setThresholdText] = useState("0.84");
-  const [otherModel, setOtherModel] = useState("");
-  const [nextDimension, setNextDimension] = useState("");
-  const retrieveRef = useRef(retrieve);
-  const textRef = useRef(thresholdText);
-  const saveSeq = useRef(0);
-  const saveChain = useRef(Promise.resolve());
-  retrieveRef.current = retrieve;
-  textRef.current = thresholdText;
+  const levelButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setOpen(true));
     void Promise.all([loadSettings(), loadRetrieveSettings(), loadEmbedding()]).then(([settings, score, embed]) => {
       setLocal(settings);
-      setRetrieve(score);
-      setThresholdText(String(score.scoreThreshold));
+      setLevel(score.level);
       setEmbedding(embed);
-      setModel(embed.model);
-      setDevice(embed.requestedDevice || embed.device);
     }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "設定を読めません"));
     const stored = window.localStorage.getItem("local-rag-theme");
     if (stored === "light" || stored === "dark" || stored === "system") {
       setTheme(stored);
     }
-    return () => window.cancelAnimationFrame(frame);
   }, []);
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  function commitThreshold(enabled: boolean): void {
-    const current = retrieveRef.current;
-    if (!current) {
-      return;
-    }
-    const raw = textRef.current.trim();
-    const number = Number(raw);
-    const numberOk = raw !== "" && Number.isFinite(number) && number >= -1 && number <= 1;
-    if (!numberOk) {
-      setThresholdText(String(current.scoreThreshold));
-      if (enabled === current.scoreThresholdEnabled) {
-        return;
-      }
-    }
-    const saved = {
-      scoreThresholdEnabled: enabled,
-      scoreThreshold: numberOk ? number : current.scoreThreshold,
-    };
-    const seq = saveSeq.current + 1;
-    saveSeq.current = seq;
-    retrieveRef.current = saved;
-    setRetrieve(saved);
-    saveChain.current = saveChain.current.then(async () => {
-      try {
-        const body = await saveRetrieveSettings(saved);
-        if (saveSeq.current !== seq) {
-          return;
-        }
-        retrieveRef.current = body;
-        setRetrieve(body);
-        setThresholdText(String(body.scoreThreshold));
-      } catch (error: unknown) {
-        if (saveSeq.current !== seq) {
-          return;
-        }
-        retrieveRef.current = current;
-        setRetrieve(current);
-        setThresholdText(String(current.scoreThreshold));
-        setNote(error instanceof Error ? error.message : "保存に失敗しました");
-      }
+  function chooseLevel(next: ThresholdLevel) {
+    setMenu(false);
+    const previous = level;
+    setLevel(next);
+    void saveRetrieveSettings({ level: next }).catch((error: unknown) => {
+      setLevel(previous);
+      setNote(error instanceof Error ? error.message : "保存に失敗しました");
     });
   }
 
-  const points = embedding?.pointCount;
-  const typedDimension = Number(nextDimension);
-  const dimensionOk = Number.isInteger(typedDimension) && typedDimension >= 1;
-  const modelNotice = points != null && points > 0
-    ? "点が残っているあいだ、モデルは変えられません。"
-    : "新しいモデルの次元を入れてください。今のモデルの次元は使いません。再起動すると反映されます。";
-
+  const current = LEVELS.find((item) => item.id === level) ?? LEVELS[0];
   return (
-    <>
-      <div className="backdrop" data-open={open ? "true" : "false"} onClick={onClose} />
-      <div className="modal" data-open={open ? "true" : "false"} role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <div className="modal-side">
-          {CATS.map((item) => (
-            <button key={item} className={cat === item ? "nav-row is-selected" : "nav-row"} type="button" onClick={() => setCat(item)}>
-              <span className="t">{item}</span>
-            </button>
-          ))}
-        </div>
-        <div className="modal-main">
-          <h2 id="settings-title" className="page-title">{cat}</h2>
-          {cat === "取り込み" && local ? (
-            <SettingRow
-              name="自動で取り込む"
-              desc={local.autoIndex ? "取り込んだ文書はすぐ索引されます。" : "新しい文書は索引されず、再索引で進みます。"}
-            >
-              <Switch
-                on={local.autoIndex}
-                onChange={(next) => {
-                  const previous = local;
-                  const saved = { ...local, autoIndex: next };
-                  setLocal(saved);
-                  void saveSettings(saved).catch((error: unknown) => {
-                    setLocal(previous);
-                    setNote(error instanceof Error ? error.message : "保存に失敗しました");
-                  });
-                }}
-              />
-            </SettingRow>
-          ) : null}
-          {cat === "索引" && embedding ? (
-            <>
-              <SettingRow name="埋め込みモデル" desc="実行中のプロセスは、再起動するまで今のモデルのままです。点が残っているあいだは変えられません。">
-                <div className="control-col">
-                  <select
-                    className="field mono"
-                    value={model}
-                    aria-label="埋め込みモデル"
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      setDevice(embedding.requestedDevice || embedding.device);
-                      setModel(next);
-                      if (next === OTHER_MODEL) {
-                        setNotice("model");
-                        return;
-                      }
-                      setOtherModel("");
-                      setNotice(next === embedding.model ? null : "model");
-                    }}
-                  >
-                    {embedding.models.map((item) => <option key={item} value={item}>{item}</option>)}
-                    <option value={OTHER_MODEL}>別のモデルを追加…</option>
-                  </select>
-                  {model === OTHER_MODEL ? (
-                    <input
-                      className="field"
-                      aria-label="別のモデル名"
-                      value={otherModel}
-                      placeholder="モデル名"
-                      onChange={(event) => setOtherModel(event.target.value)}
-                    />
-                  ) : null}
-                </div>
-              </SettingRow>
-              <Impact
-                open={notice === "model"}
-                text={modelNotice}
-                extra={notice === "model" && (points == null || points === 0) ? (
-                  <input
-                    className="field num"
-                    aria-label="新しいモデルの次元"
-                    inputMode="numeric"
-                    placeholder="次元"
-                    value={nextDimension}
-                    onChange={(event) => setNextDimension(event.target.value)}
-                  />
-                ) : null}
-                canApply={(points == null || points === 0) && dimensionOk && (model !== OTHER_MODEL || otherModel.trim() !== "")}
-                onCancel={() => {
-                  setModel(embedding.model);
-                  setOtherModel("");
-                  setNextDimension("");
-                  setNotice(null);
-                }}
-                onApply={() => {
-                  const chosen = model === OTHER_MODEL ? otherModel.trim() : model;
-                  void saveEmbeddingModel(chosen, typedDimension).then((body) => {
-                    setNotice(null);
-                    setOtherModel("");
-                    setNextDimension("");
-                    setModel(chosen);
-                    setEmbedding({
-                      ...embedding,
-                      model: chosen,
-                      requestedModel: chosen,
-                      models: embedding.models.includes(chosen) ? embedding.models : [...embedding.models, chosen],
-                    });
-                    if (body.restartRequired) {
-                      setNote("再起動すると反映されます。");
+    <div className="col set">
+      <h1>設定</h1>
+      <section style={{ marginTop: 24 }}>
+        <div className="sec-head"><h2>取り込み</h2></div>
+        <Row
+          name="フォルダの変更を自動で取り込む"
+          desc="オフにすると、概要の「今すぐ確認」を押したときだけ取り込みます。"
+          control={
+            <Toggle
+              on={local?.autoIndex ?? false}
+              onChange={(next) => {
+                if (!local) {
+                  return;
+                }
+                const saved = { ...local, autoIndex: next };
+                setLocal(saved);
+                void saveSettings(saved).catch((error: unknown) => {
+                  setLocal(local);
+                  setNote(error instanceof Error ? error.message : "保存に失敗しました");
+                });
+              }}
+            />
+          }
+        />
+      </section>
+      <section>
+        <div className="sec-head"><h2>検索の精度と速さ</h2></div>
+        {embedding ? (
+          <>
+            <Row
+              name="埋め込みモデル"
+              desc="変えると、すべてのファイルを取り込み直します。"
+              control={
+                <ModelSelect
+                  embedding={embedding}
+                  onError={setNote}
+                  onSaved={(model) => setEmbedding((current) => {
+                    if (!current) {
+                      return current;
                     }
-                  }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "変更できませんでした"));
-                }}
-              />
-              <SettingRow name="計算に使う装置" desc="起動中の処理は、次に起動するまで今の装置のまま動きます。">
-                <select
-                  className="field"
-                  value={device}
-                  aria-label="計算に使う装置"
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setModel(embedding.model);
-                    setOtherModel("");
-                    setNextDimension("");
-                    setDevice(next);
-                    setNotice(next === embedding.device ? null : "device");
-                  }}
-                >
-                  {embedding.devices.map((item) => <option key={item} value={item}>{item === "cpu" ? "CPU" : "GPU"}</option>)}
-                </select>
-              </SettingRow>
-              <Impact
-                open={notice === "device"}
-                text="再起動するまで、今の装置のままです。"
-                onCancel={() => {
-                  setDevice(embedding.requestedDevice || embedding.device);
-                  setNotice(null);
-                }}
-                onApply={() => {
-                  const previous = embedding.requestedDevice || embedding.device;
-                  void saveDevice(device).then(() => {
-                    setEmbedding({ ...embedding, requestedDevice: device });
-                    setNotice(null);
-                    setNote("再起動すると反映されます。");
-                  }).catch((error: unknown) => {
-                    setDevice(previous);
-                    setNote(error instanceof Error ? error.message : "変更できませんでした");
-                  });
-                }}
-              />
-              <SettingRow name="キーワード検索の方式" desc="いま選べるのは fastembed だけです。">
-                <select className="field" value={embedding.keyword} aria-label="キーワード検索の方式" disabled>
-                  <option value={embedding.keyword}>{embedding.keyword}</option>
-                </select>
-              </SettingRow>
-            </>
-          ) : null}
-          {cat === "検索結果" && retrieve ? (
-            <>
-              <SettingRow
-                name="類似度で絞り込む"
-                desc="質問との類似度が低い文書を検索結果から外します。結果が0件になることがあります。"
-              >
-                <Switch
-                  on={retrieve.scoreThresholdEnabled}
-                  onChange={(next) => commitThreshold(next)}
+                    if (!model || model === current.model) {
+                      return { ...current, requestedModel: null };
+                    }
+                    return {
+                      ...current,
+                      requestedModel: model,
+                      models: current.models.includes(model) ? current.models : [...current.models, model],
+                    };
+                  })}
                 />
-              </SettingRow>
-              {retrieve.scoreThresholdEnabled ? (
-                <div className="set-row is-child">
-                  <div className="copy">
-                    <div className="name">しきい値</div>
-                    <div className="desc">-1〜1の値。初期値は0.84です。</div>
-                  </div>
-                  <input
-                    className="field num"
-                    aria-label="しきい値"
-                    inputMode="decimal"
-                    value={thresholdText}
-                    onChange={(event) => setThresholdText(event.target.value)}
-                    onBlur={() => commitThreshold(true)}
-                  />
+              }
+            />
+            <Row
+              name="計算に使う装置"
+              desc="次に起動したときから切り替わります。"
+              control={
+                <Select
+                  value={embedding.requestedDevice || embedding.device}
+                  options={embedding.devices.map((item) => ({ value: item, label: item === "cpu" ? "CPU" : "GPU" }))}
+                  onChange={(next) => {
+                    const previous = embedding.requestedDevice || embedding.device;
+                    setEmbedding((current) => (current ? { ...current, requestedDevice: next } : current));
+                    void saveDevice(next).catch((error: unknown) => {
+                      setEmbedding((current) => (current ? { ...current, requestedDevice: previous } : current));
+                      setNote(error instanceof Error ? error.message : "変更できませんでした");
+                    });
+                  }}
+                />
+              }
+            />
+            <Row
+              name="キーワードの一致でも探す"
+              desc="文書の意味に加えて、言葉がそのまま含まれる文書も探します。"
+              control={
+                <Toggle
+                  on={embedding.keywordEnabled !== false}
+                  onChange={(next) => {
+                    const previous = embedding.keywordEnabled !== false;
+                    setEmbedding((current) => (current ? { ...current, keywordEnabled: next } : current));
+                    void saveKeyword(next).catch((error: unknown) => {
+                      setEmbedding((current) => (current ? { ...current, keywordEnabled: previous } : current));
+                      setNote(error instanceof Error ? error.message : "保存に失敗しました");
+                    });
+                  }}
+                />
+              }
+            />
+          </>
+        ) : null}
+      </section>
+      <section>
+        <div className="sec-head"><h2>検索結果</h2></div>
+        <Row
+          name="関係の薄い文書を除く"
+          desc="質問と似ていない文書を検索結果から外します。"
+          control={
+            <span className="wrap">
+              <button
+                ref={levelButton}
+                className="select"
+                type="button"
+                aria-label="関係の薄い文書を除く"
+                onClick={() => {
+                  const rect = levelButton.current?.getBoundingClientRect();
+                  const below = rect ? window.innerHeight - rect.bottom : 0;
+                  setMenuUp(below < 220);
+                  setMenu((open) => !open);
+                }}
+              >
+                <span>{current.label}</span>
+                {Glyph.down}
+              </button>
+              {menu ? (
+                <div className={menuUp ? "menu up" : "menu"} role="listbox">
+                  {LEVELS.map((item) => (
+                    <button key={item.id} className={item.id === level ? "mi on" : "mi"} type="button" onClick={() => chooseLevel(item.id)}>
+                      <span className="ck">{item.id === level ? "✓" : ""}</span>
+                      <span>
+                        <span className="t">{item.label}</span>
+                        <span className="dd">{item.detail}</span>
+                      </span>
+                    </button>
+                  ))}
                 </div>
               ) : null}
-            </>
-          ) : null}
-          {cat === "表示" ? (
-            <SettingRow name="テーマ" desc="OSに合わせる、ライト、ダークから選びます。">
-              <select
-                className="field"
-                aria-label="テーマ"
-                value={theme}
-                onChange={(event) => {
-                  const next = event.target.value as ThemeChoice;
-                  setTheme(next);
-                  document.documentElement.dataset.theme = next;
-                  window.localStorage.setItem("local-rag-theme", next);
-                }}
-              >
-                <option value="system">OSに合わせる</option>
-                <option value="light">ライト</option>
-                <option value="dark">ダーク</option>
-              </select>
-            </SettingRow>
-          ) : null}
-          {note ? <p className="error-line">{note}</p> : null}
-        </div>
-      </div>
-    </>
-  );
-}
-
-function SettingRow({ name, desc, children }: { name: string; desc: ReactNode; children: ReactNode }) {
-  return (
-    <div className="set-row">
-      <div className="copy">
-        <div className="name">{name}</div>
-        <div className="desc">{desc}</div>
-      </div>
-      {children}
+            </span>
+          }
+        />
+      </section>
+      <section>
+        <div className="sec-head"><h2>表示</h2></div>
+        <Row
+          name="テーマ"
+          desc=""
+          control={
+            <Select
+              value={theme}
+              options={[
+                { value: "system", label: "Windows の設定に合わせる" },
+                { value: "light", label: "ライト" },
+                { value: "dark", label: "ダーク" },
+              ]}
+              onChange={(next) => {
+                const choice = next as ThemeChoice;
+                setTheme(choice);
+                document.documentElement.dataset.theme = choice;
+                window.localStorage.setItem("local-rag-theme", choice);
+              }}
+            />
+          }
+        />
+      </section>
+      {note ? <p className="error-line">{note}</p> : null}
     </div>
   );
 }
 
-function Switch({ on, onChange }: { on: boolean; onChange: (next: boolean) => void }) {
+function Row({ name, desc, control }: { name: string; desc: string; control: ReactNode }) {
   return (
-    <span className="switch-line">
-      <button className="switch" type="button" role="switch" aria-checked={on} onClick={() => onChange(!on)}>
-        <span className="switch__thumb" />
-      </button>
-      <span className="switch-word">{on ? "オン" : "オフ"}</span>
+    <div className="r">
+      <div className="grow">
+        <span>{name}</span>
+        {desc ? <span className="d">{desc}</span> : null}
+      </div>
+      {control}
+    </div>
+  );
+}
+
+function Toggle({ on, onChange }: { on: boolean; onChange: (next: boolean) => void }) {
+  return (
+    <button className={on ? "toggle on" : "toggle"} type="button" role="switch" aria-checked={on} onClick={() => onChange(!on)}>
+      {on ? "オン" : "オフ"}<i />
+    </button>
+  );
+}
+
+function Select({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (next: string) => void;
+}) {
+  return (
+    <span className="select" style={{ padding: 0, position: "relative" }}>
+      <select
+        aria-label={options.find((item) => item.value === value)?.label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        style={{ width: "100%", height: "100%", border: 0, background: "transparent", padding: "0 28px 0 12px", appearance: "none" }}
+      >
+        {options.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+      </select>
+      <span style={{ position: "absolute", right: 10, display: "flex", pointerEvents: "none" }}>{Glyph.down}</span>
     </span>
   );
 }
 
-function Impact({
-  open,
-  text,
-  extra = null,
-  canApply = true,
-  onCancel,
-  onApply,
+function ModelSelect({
+  embedding,
+  onError,
+  onSaved,
 }: {
-  open: boolean;
-  text: string;
-  extra?: ReactNode;
-  canApply?: boolean;
-  onCancel: () => void;
-  onApply: () => void;
+  embedding: EmbeddingInfo;
+  onError: (message: string) => void;
+  onSaved: (model: string | null) => void;
 }) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [dimension, setDimension] = useState("");
+  const label = (id: string) => MODEL_LABELS[id] ?? id;
+  const typed = Number(dimension);
+  const dimensionOk = Number.isInteger(typed) && typed >= 1;
   return (
-    <div className="notice" data-open={open ? "true" : "false"} aria-live="polite">
-      <div className="notice__inner">
-        <svg className="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-          <circle cx="8" cy="8" r="6" />
-          <path d="M8 7.25v4M8 4.75v.5" />
-        </svg>
-        <div className="notice__body">
-          <div className="type-body-wrap">{text}</div>
-          {extra}
-          <div className="acts">
-            {canApply ? <button className="primary" type="button" onClick={onApply}>変更する</button> : null}
-            <button className="quiet" type="button" onClick={onCancel}>キャンセル</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <span className="control-col">
+      <Select
+        value={pending ?? embedding.requestedModel ?? embedding.model}
+        options={embedding.models.map((item) => ({ value: item, label: label(item) }))}
+        onChange={(next) => {
+          if (next === embedding.model) {
+            setPending(null);
+            if (embedding.requestedModel && embedding.requestedModel !== embedding.model) {
+              void saveEmbeddingModel(embedding.model, embedding.dimension).then(() => {
+                onSaved(null);
+                onError("");
+              }).catch((error: unknown) => onError(error instanceof Error ? error.message : "変更できませんでした"));
+            }
+            return;
+          }
+          if ((embedding.pointCount ?? 0) > 0) {
+            onError("点が残っているあいだ、モデルは変えられません。");
+            return;
+          }
+          setPending(next);
+          onError("新しいモデルの次元を入れてください。再起動すると反映されます。");
+        }}
+      />
+      {pending ? (
+        <span className="pair">
+          <input
+            className="select"
+            style={{ width: 96 }}
+            aria-label="新しいモデルの次元"
+            inputMode="numeric"
+            placeholder="次元"
+            value={dimension}
+            onChange={(event) => setDimension(event.target.value)}
+          />
+          <button
+            className="btn sm"
+            type="button"
+            disabled={!dimensionOk}
+            onClick={() => {
+              void saveEmbeddingModel(pending, typed).then(() => {
+                onSaved(pending);
+                setPending(null);
+                setDimension("");
+                onError("再起動すると反映されます。");
+              }).catch((error: unknown) => onError(error instanceof Error ? error.message : "変更できませんでした"));
+            }}
+          >
+            変更する
+          </button>
+        </span>
+      ) : null}
+    </span>
   );
 }

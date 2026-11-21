@@ -22,6 +22,7 @@ from kbindex.db import (
     chunk_public_id,
     delete_chunks_for,
     delete_postings,
+    app_settings_row,
     generation_row,
     hydrate_chunks,
     insert_chunks,
@@ -368,7 +369,7 @@ class Engine:
         depth = leg_depth(limit, max_per_record)
         query_vector = self.embedder.embed_query(query)
         dense_pairs = self.vectors.search(query_vector, limit=depth, kb_ids=kb_ids)
-        sparse_pairs = self._fastembed(query, depth, kb_ids)
+        sparse_pairs = [] if not self._keyword_enabled() else self._fastembed(query, depth, kb_ids)
         ranked = rrf_scores(
             [[cid for cid, _score in dense_pairs], [cid for cid, _score in sparse_pairs]],
             k=1,
@@ -460,6 +461,11 @@ class Engine:
                 "blockIndex": row["block_index"],
             },
         }
+
+    def _keyword_enabled(self) -> bool:
+        with self.db.connect() as conn:
+            row = app_settings_row(conn)
+        return bool(row.get("keyword_enabled", True))
 
     def _fastembed(self, query: str, limit: int, kb_ids: list[str] | None) -> list[tuple[str, float]]:
         """fastembed document weight times the recompute IDF. Not Okapi."""

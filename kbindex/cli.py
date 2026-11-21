@@ -181,7 +181,7 @@ def _push(api: str, kb: str, external: str, name: str, version: int, blocks: dic
 
 
 def _delete(api: str, kb: str, external: str) -> None:
-    _request("DELETE", f"{api}/api/v1/kb/{kb}/records/{external}", None)
+    _request("DELETE", f"{api}/api/v1/kb/{kb}/records/{external}?source=sync", None)
 
 
 def _request(method: str, url: str, body) -> tuple[int, dict]:

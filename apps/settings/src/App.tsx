@@ -1,24 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { loadActivity, loadSettings, loadSummary, saveSettings, type Activity, type LocalSettings, type Summary } from "./api";
 import { FolderScreen } from "./FolderScreen";
-import { Icon } from "./icons";
+import { Glyph } from "./glyphs";
 import { Overview } from "./Overview";
-import { SettingsDialog } from "./SettingsDialog";
-import { statusBarLabel } from "./view";
+import { SettingsScreen } from "./SettingsDialog";
 
-type Screen = { kind: "overview" } | { kind: "folder"; id: string };
+type Screen = { kind: "overview" } | { kind: "folder"; id: string } | { kind: "settings" };
 
 export function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [local, setLocal] = useState<LocalSettings | null>(null);
   const [activity, setActivity] = useState<Activity>({ hasMore: false, events: [] });
   const [screen, setScreen] = useState<Screen>({ kind: "overview" });
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [adding, setAdding] = useState(false);
   const [path, setPath] = useState("");
   const [error, setError] = useState("");
-  const settingsButton = useRef<HTMLButtonElement>(null);
 
   const refresh = useCallback(async () => {
     const [nextSummary, nextLocal, nextActivity] = await Promise.all([
@@ -50,127 +47,84 @@ export function App() {
   }, [refresh]);
 
   const folder = summary?.folders.find((item) => item.id === (screen.kind === "folder" ? screen.id : "")) ?? null;
-
   useEffect(() => {
     if (screen.kind === "folder" && summary && folder === null) {
       setScreen({ kind: "overview" });
     }
   }, [screen, summary, folder]);
 
+  const importing = summary != null && !summary.pause.active && (summary.active > 0 || summary.queued > 0);
   return (
     <div className="app">
-      <div className="body">
-      <nav className="side" aria-label="local-rag">
+      <aside className="side">
         <div className="side-scroll">
-        <div className="brand">local-rag</div>
-        <button className={screen.kind === "overview" ? "nav-row is-selected" : "nav-row"} type="button" data-measure="nav-row" onClick={() => setScreen({ kind: "overview" })}>
-          <Icon name="home" size={16} />
-          <span className="t">概要</span>
-        </button>
-        <div className="cap">取り込むフォルダ</div>
-        {(summary?.folders ?? []).map((item) => (
-          <button
-            key={item.id}
-            className={screen.kind === "folder" && screen.id === item.id ? "nav-row is-selected" : "nav-row"}
-            type="button"
-            onClick={() => setScreen({ kind: "folder", id: item.id })}
-          >
-            <Icon name="folder" size={16} />
-            <span className="t">{item.name}</span>
-            {item.failed > 0 ? (
-              <span className="meta num"><Icon name="err" size={12} />{item.failed}件失敗</span>
-            ) : (
-              <span className="meta num">{item.total}件</span>
-            )}
+          <div className="brand">local-rag</div>
+          <button className={screen.kind === "overview" ? "nav on" : "nav"} type="button" onClick={() => setScreen({ kind: "overview" })}>
+            {Glyph.home}<span className="name">概要</span>
           </button>
-        ))}
-        <button className="nav-row" type="button" onClick={() => setAdding((open) => !open)}>
-          <Icon name="plus" size={16} />
-          <span className="t">フォルダを追加</span>
-        </button>
-        {adding ? (
-          <form
-            className="add-row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!local || !path.trim()) {
-                return;
-              }
-              const next = { ...local, folders: [...local.folders, path.trim()] };
-              void saveSettings(next).then((saved) => {
-                setLocal(saved);
-                setPath("");
-                setAdding(false);
-              }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "保存に失敗しました"));
-            }}
-          >
-            <input aria-label="追加するフォルダ" value={path} onChange={(event) => setPath(event.target.value)} />
-            <button className="quiet" type="submit">追加</button>
-          </form>
-        ) : null}
+          <div className="label">取り込むフォルダ</div>
+          {(summary?.folders ?? []).map((item) => (
+            <button
+              key={item.id}
+              className={screen.kind === "folder" && screen.id === item.id ? "nav on" : "nav"}
+              type="button"
+              onClick={() => setScreen({ kind: "folder", id: item.id })}
+            >
+              {Glyph.folder}
+              <span className="name">{item.name}</span>
+              {importing && item.active + item.queued > 0 ? <span className="mark spin">{Glyph.syncSmall}</span> : null}
+              {!importing && item.failed > 0 ? <span className="mark bad">{Glyph.errSmall}</span> : null}
+            </button>
+          ))}
+          <button className="nav add" type="button" onClick={() => setAdding((open) => !open)}>
+            {Glyph.plus}<span className="name">フォルダを追加</span>
+          </button>
+          {adding ? (
+            <form
+              className="add-row"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!local || !path.trim()) {
+                  return;
+                }
+                const next = { ...local, folders: [...local.folders, path.trim()] };
+                void saveSettings(next).then((saved) => {
+                  setLocal(saved);
+                  setPath("");
+                  setAdding(false);
+                }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "保存に失敗しました"));
+              }}
+            >
+              <input aria-label="追加するフォルダ" value={path} onChange={(event) => setPath(event.target.value)} />
+              <button className="btn sm" type="submit">追加</button>
+            </form>
+          ) : null}
         </div>
-        <button ref={settingsButton} className="nav-row" type="button" onClick={() => setSettingsOpen(true)}>
-          <Icon name="gear" size={16} />
-          <span className="t">設定</span>
+        <button className={screen.kind === "settings" ? "nav on" : "nav"} type="button" onClick={() => setScreen({ kind: "settings" })}>
+          {Glyph.gear}<span className="name">設定</span>
         </button>
-      </nav>
-      <main className="main" data-measure="main">
+      </aside>
+      <main className="main">
         {error ? <p className="error-line">{error}</p> : null}
-        {summary ? <ScreenBody screen={screen} summary={summary} folder={folder} local={local} activity={activity.events} showAll={showAll} onShowAll={() => setShowAll(true)} onReload={refresh} /> : null}
+        {summary ? (
+          <Body
+            screen={screen}
+            summary={summary}
+            folder={folder}
+            local={local}
+            activity={activity}
+            showAll={showAll}
+            onShowAll={() => setShowAll(true)}
+            onReload={refresh}
+            onAddFolder={() => setAdding(true)}
+          />
+        ) : null}
       </main>
-      </div>
-      {summary ? (
-        <StatusBar
-          summary={summary}
-          onOverview={() => setScreen({ kind: "overview" })}
-          onFailures={() => {
-            setScreen({ kind: "overview" });
-            window.setTimeout(() => document.getElementById("failed-files")?.scrollIntoView({ block: "start" }), 0);
-          }}
-        />
-      ) : null}
-      {settingsOpen ? (
-        <SettingsDialog
-          onClose={() => {
-            setSettingsOpen(false);
-            settingsButton.current?.focus();
-          }}
-        />
-      ) : null}
     </div>
   );
 }
 
-function StatusBar({
-  summary,
-  onOverview,
-  onFailures,
-}: {
-  summary: Summary;
-  onOverview: () => void;
-  onFailures: () => void;
-}) {
-  const working = !summary.pause.active && (summary.active > 0 || summary.queued > 0);
-  const ratio = summary.total === 0 ? 0 : summary.done / summary.total;
-  return (
-    <div className="statusbar" data-measure="statusbar">
-      <button type="button" onClick={onOverview}>
-        {working ? <span className="spinner" /> : summary.pause.active ? <Icon name="pause" size={14} /> : <Icon name="check" size={14} />}
-        <span className="num">{statusBarLabel(summary)}</span>
-        {working ? <span className="mini-bar" aria-hidden="true"><i style={{ width: `${Math.round(ratio * 100)}%` }} /></span> : null}
-      </button>
-      {summary.failed > 0 ? (
-        <button type="button" className="fail-bit" onClick={onFailures}>
-          <span aria-hidden="true">・</span>
-          <Icon name="err" size={12} />
-          <span className="num">{summary.failed}件を取り込めませんでした</span>
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function ScreenBody({
+function Body({
   screen,
   summary,
   folder,
@@ -179,21 +133,35 @@ function ScreenBody({
   showAll,
   onShowAll,
   onReload,
+  onAddFolder,
 }: {
   screen: Screen;
   summary: Summary;
   folder: Summary["folders"][number] | null;
   local: LocalSettings | null;
-  activity: Activity["events"];
+  activity: Activity;
   showAll: boolean;
   onShowAll: () => void;
   onReload: () => Promise<void>;
+  onAddFolder: () => void;
 }) {
   switch (screen.kind) {
     case "overview":
-      return <Overview summary={summary} activity={activity} showAll={showAll} onShowAll={onShowAll} onReload={onReload} />;
+      return (
+        <Overview
+          summary={summary}
+          local={local}
+          activity={activity.events}
+          showAll={showAll}
+          onShowAll={onShowAll}
+          onReload={onReload}
+          onAddFolder={onAddFolder}
+        />
+      );
     case "folder":
       return folder ? <FolderScreen key={folder.id} folder={folder} local={local} onReload={onReload} /> : null;
+    case "settings":
+      return <SettingsScreen />;
     default: {
       const never: never = screen;
       return never;
