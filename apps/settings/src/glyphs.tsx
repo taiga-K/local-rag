@@ -67,8 +67,8 @@ export const Glyph = {
   warn: (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <path d="M8.86 2.4a1 1 0 0 0-1.72 0L1.2 13.1a1 1 0 0 0 .86 1.5h11.88a1 1 0 0 0 .86-1.5z" />
-      <path d="M8 6.1v3.4" stroke="#fff" strokeWidth="1.4" strokeLinecap="round" />
-      <circle cx="8" cy="11.5" r=".8" fill="#fff" />
+      <path d="M8 6.1v3.4" stroke="var(--threshold-warn-mark)" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="8" cy="11.5" r=".8" fill="var(--threshold-warn-mark)" />
     </svg>
   ),
   down: (

@@ -19,6 +19,7 @@
   --ok: #448361;
   --track: rgba(55, 53, 47, 0.1);
   --threshold-warn: #9d5d00;
+  --threshold-warn-mark: #fff;
   --threshold-err: #c42b1c;
   color-scheme: light;
 }
@@ -35,6 +36,7 @@
   --line-soft: #383836;
   --track: rgba(240, 239, 237, 0.12);
   --threshold-warn: #fce100;
+  --threshold-warn-mark: #191919;
   --threshold-err: #ff99a4;
   color-scheme: dark;
 }
@@ -52,6 +54,7 @@
     --line-soft: #383836;
     --track: rgba(240, 239, 237, 0.12);
     --threshold-warn: #fce100;
+    --threshold-warn-mark: #191919;
     --threshold-err: #ff99a4;
     color-scheme: dark;
   }
@@ -312,6 +315,10 @@ section { margin-top: 40px; }
 .threshold-child input[aria-invalid="true"]:focus-visible,
 .threshold-child input[aria-invalid="true"]:active {
   border: 2px solid var(--threshold-err);
+  outline: none;
+}
+.threshold-child input[aria-invalid="true"]:focus,
+.threshold-child input[aria-invalid="true"]:focus-visible {
   outline: 2px solid var(--threshold-err);
   outline-offset: 2px;
 }
