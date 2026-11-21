@@ -47,15 +47,15 @@ export const Glyph = {
   err: (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
       <circle cx="8" cy="8" r="7" fill="currentColor" />
-      <path d="M8 4.6v4.2" stroke="#fff" strokeWidth="1.4" strokeLinecap="round" />
-      <circle cx="8" cy="11.2" r=".85" fill="#fff" />
+      <path d="M8 4.6v4.2" stroke="var(--danger-mark)" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="8" cy="11.2" r=".85" fill="var(--danger-mark)" />
     </svg>
   ),
   errSmall: (
     <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
       <circle cx="8" cy="8" r="7" fill="currentColor" />
-      <path d="M8 4.6v4.2" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" />
-      <circle cx="8" cy="11.2" r="1" fill="#fff" />
+      <path d="M8 4.6v4.2" stroke="var(--danger-mark)" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="8" cy="11.2" r="1" fill="var(--danger-mark)" />
     </svg>
   ),
   pause: (

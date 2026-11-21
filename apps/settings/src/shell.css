@@ -16,6 +16,7 @@
   --accent-text: #2383e2;
   --link: #1f6fc5;
   --danger: #d44c47;
+  --danger-mark: #fff;
   --danger-text: #c4413c;
   --ok: #448361;
   --track: rgba(55, 53, 47, 0.1);
@@ -39,6 +40,7 @@
   --accent-text: #60cdff;
   --link: #60cdff;
   --danger: #ff99a4;
+  --danger-mark: #191919;
   --danger-text: #ff99a4;
   --ok: #6ccb5f;
   --track: rgba(240, 239, 237, 0.12);
@@ -63,6 +65,7 @@
     --accent-text: #60cdff;
     --link: #60cdff;
     --danger: #ff99a4;
+    --danger-mark: #191919;
     --danger-text: #ff99a4;
     --ok: #6ccb5f;
     --track: rgba(240, 239, 237, 0.12);
@@ -76,6 +79,7 @@
 
 :root[data-theme="light"] [data-astryx-theme] { color-scheme: light; }
 :root[data-theme="dark"] [data-astryx-theme] { color-scheme: dark; }
+:root[data-theme="system"] [data-astryx-theme] { color-scheme: light dark; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
