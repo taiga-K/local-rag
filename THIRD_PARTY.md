@@ -17,6 +17,11 @@ Versions below are the ones installed for the unit-test environment on 2026-11-1
 | sudachipy | 0.7.0 | Apache-2.0 |
 | sudachidict-core | 20261015 | Apache-2.0 |
 | beautifulsoup4 | 4.15.0 | MIT |
+| markdown-it-py | 4.3.0 | MIT |
+| mdit-py-plugins | 0.7.0 | MIT |
+| selectolax | 1.0.2 | MIT |
+| python-oxmsg | 0.0.2 | MIT |
+| compressed-rtf | 1.0.7 | MIT |
 | pytest | 9.2.0 | MIT |
 
 `sentence-transformers` is the optional extra `embed`. It is not imported by the unit tests. Its license is Apache-2.0. The API image installs it at build time. The embedding model `cl-nagoya/ruri-v3-310m` is Apache-2.0.

@@ -12,6 +12,11 @@ dependencies = [
   "qdrant-client>=1.12",
   "pyyaml>=6.0",
   "beautifulsoup4>=4.12",
+  "markdown-it-py>=3.0",
+  "mdit-py-plugins>=0.4",
+  "selectolax>=0.3",
+  "python-oxmsg>=0.0.2",
+  "compressed-rtf>=1.0.7",
 ]
 
 [project.optional-dependencies]

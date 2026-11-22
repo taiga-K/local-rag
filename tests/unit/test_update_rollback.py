@@ -137,7 +137,7 @@ class _Conn:
             store["postings"].append(row)
             return _Result([])
         if text.startswith("insert into blocks"):
-            keys = ("block_id", "record_id", "position", "parent_position", "group_position", "type", "text")
+            keys = ("block_id", "record_id", "position", "parent_position", "group_position", "type", "text", "citation")
             store["blocks"].append(dict(zip(keys, params, strict=True)))
             return _Result([])
         if text.startswith("insert into block_groups"):

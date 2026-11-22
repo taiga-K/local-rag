@@ -260,6 +260,9 @@ class Handler(BaseHTTPRequestHandler):
                     ],
                 })
                 return
+            if path.startswith("/api/v1/kb/") and path.endswith("/unreadable"):
+                self._send(200, {"files": []})
+                return
             if path.startswith("/api/v1/kb/") and path.endswith("/records"):
                 kb_id = path.split("/")[4]
                 rows = STATE["records"].get(kb_id, [])

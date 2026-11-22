@@ -75,8 +75,20 @@ def write_payload(directory: Path, kb_id: str, record_id: str, raw: bytes, store
     return str(raw_path), str(stored_path)
 
 
-def texts_of_stored(payload: dict) -> list[tuple[int, str, str]]:
-    """`(index, type, indexable text)` for each stored block. Images keep an empty text."""
+_CITATION_KEYS = (
+    "section_title",
+    "page_number",
+    "line_number",
+    "paragraph_number",
+    "sheet_name",
+    "row_number",
+    "column_number",
+    "slide_number",
+)
+
+
+def texts_of_stored(payload: dict) -> list[tuple[int, str, str, dict | None]]:
+    """`(index, type, indexable text, citation)` for each stored block. Images keep an empty text."""
     out = []
     for block in payload.get("blocks") or []:
         kind = block.get("type") or ""
@@ -90,12 +102,20 @@ def texts_of_stored(payload: dict) -> list[tuple[int, str, str]]:
                 text = data.get("row_natural_language_text") or ""
         else:
             text = ""
-        out.append((int(block.get("index") or 0), kind, text if isinstance(text, str) else ""))
+        out.append((int(block.get("index") or 0), kind, text if isinstance(text, str) else "", _citation(block)))
     return out
 
 
+def _citation(block: dict) -> dict | None:
+    raw = block.get("citation_metadata")
+    if not isinstance(raw, dict):
+        return None
+    kept = {key: raw[key] for key in _CITATION_KEYS if raw.get(key) is not None}
+    return kept or None
+
+
 def build_pieces(record_id: str, payload: dict, embedder: Embedder) -> list:
-    pairs = [(index, text) for index, _kind, text in texts_of_stored(payload)]
+    pairs = [(index, text) for index, _kind, text, _cite in texts_of_stored(payload)]
     return chunk_blocks(pairs, window=embedder.split_limit(), spans=embedder.token_spans)
 
 
@@ -318,7 +338,7 @@ class Engine:
                 )
                 conn.commit()
                 return "FAILED"
-            graph = [(index, parent_of(payload, index), kind, text) for index, kind, text in listed]
+            graph = [(index, parent_of(payload, index), kind, text, cite) for index, kind, text, cite in listed]
             replace_graph(conn, rid, graph)
             replace_groups(conn, rid, groups_of(payload))
             delete_chunks_for(conn, rid)
@@ -454,12 +474,7 @@ class Engine:
                 "mimeType": "application/blocks",
                 "updatedAt": updated,
             },
-            "citation": {
-                "url": None,
-                "recordUrl": None,
-                "pageNum": None,
-                "blockIndex": row["block_index"],
-            },
+            "citation": _result_citation(row),
         }
 
     def _keyword_enabled(self) -> bool:
@@ -485,6 +500,27 @@ class Engine:
             scores[row["chunk_id"]] = scores.get(row["chunk_id"], 0.0) + float(row["tf"]) * idf
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return [(chunk_id, score) for chunk_id, score in ranked if score > 0][:limit]
+
+
+def _result_citation(row) -> dict:
+    raw = row.get("citation") or {}
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "url": None,
+        "recordUrl": None,
+        "pageNum": raw.get("page_number"),
+        "blockIndex": row["block_index"],
+        "sectionTitle": raw.get("section_title"),
+        "lineNumber": raw.get("line_number"),
+        "paragraphNumber": raw.get("paragraph_number"),
+        "sheetName": raw.get("sheet_name"),
+        "rowNumber": raw.get("row_number"),
+        "columnNumber": raw.get("column_number"),
+        "slideNumber": raw.get("slide_number"),
+    }
 
 
 def _stored_error(exc: BaseException) -> str:
