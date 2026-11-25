@@ -131,6 +131,7 @@ function ResultMessage({ entry, folderNames }: { entry: Extract<Entry, { role: "
         <div className="answer-title">
           {chunks.length > 0 ? `${chunks.length}件の関連チャンク` : "一致するチャンクはありません"}
         </div>
+        <div className="answer-query">クエリ: {entry.query}</div>
         {chunks.map((chunk, index) => (
           <ChunkCard key={chunk.id} chunk={chunk} index={index} folderNames={folderNames} />
         ))}
