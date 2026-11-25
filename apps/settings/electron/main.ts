@@ -60,8 +60,11 @@ ipcMain.handle("localrag:detach-folder", async (_event, kbId: unknown) => {
   }
   try {
     const current = await fetch(`${API_BASE}/api/v1/settings/local`);
-    const settings = (await current.json()) as { folders?: unknown; includeSubfolders?: unknown; autoIndex?: unknown };
-    const folders = Array.isArray(settings.folders) ? settings.folders.filter((item): item is string => typeof item === "string") : [];
+    const settings = (await current.json().catch(() => ({}))) as { folders?: unknown; includeSubfolders?: unknown; autoIndex?: unknown };
+    if (!current.ok || !Array.isArray(settings.folders)) {
+      return { ok: false, error: `settings: HTTP ${current.status}` };
+    }
+    const folders = settings.folders.filter((item): item is string => typeof item === "string");
     const saved = await fetch(`${API_BASE}/api/v1/settings/local`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
