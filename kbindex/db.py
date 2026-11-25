@@ -861,6 +861,13 @@ def _drop_wiped_deltas(conn, touched: list[dict]) -> None:
     )
 
 
+def _json_text(value: Any) -> str | None:
+    """JSON text for a jsonb column. A string is already encoded."""
+    if value is None or isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
 def replace_graph(conn, record_id, blocks: list[tuple]) -> None:
     conn.execute("delete from blocks where record_id = %s", (record_id,))
     conn.execute("delete from block_groups where record_id = %s", (record_id,))
@@ -870,11 +877,11 @@ def replace_graph(conn, record_id, blocks: list[tuple]) -> None:
         conn.execute(
             """
             insert into blocks (block_id, record_id, position, parent_position, group_position, type, text, citation)
-            values (%s, %s, %s, %s, %s, %s, %s, %s)
+            values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             """,
             (
                 block_id_for(record_id, position), record_id, position, parent, parent, kind, text,
-                citation,
+                _json_text(citation),
             ),
         )
 
@@ -946,12 +953,12 @@ def write_record_index(conn, record_id, snap: dict) -> None:
         conn.execute(
             """
             insert into blocks (block_id, record_id, position, parent_position, group_position, type, text, citation)
-            values (%s, %s, %s, %s, %s, %s, %s, %s)
+            values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             """,
             (
                 row["block_id"], record_id, row["position"], row["parent_position"],
                 row["group_position"], row["type"], row["text"],
-                row.get("citation"),
+                _json_text(row.get("citation")),
             ),
         )
     for row in snap["groups"]:
