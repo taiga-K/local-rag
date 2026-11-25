@@ -10,3 +10,7 @@ def pause(_content: bytes) -> str:
 
 def ready(_content: bytes) -> str:
     return "ready"
+
+
+def wide(_content: bytes) -> str:
+    return "あ" * 200_000

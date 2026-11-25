@@ -18,11 +18,11 @@ from kbindex.parse_csv import parse_csv
 from kbindex.parse_html import parse_html
 from kbindex.parse_json import parse_json
 from kbindex.parse_md import parse_markdown
-from kbindex.parse_msg import MSG_PARSE_TIMEOUT_SECONDS, _MAX_BYTES, _page_of, _run_bounded, parse_msg
+from kbindex.parse_msg import MSG_PARSE_TIMEOUT_SECONDS, _MAX_BYTES, _parts_of, _run_bounded, parse_msg
 from kbindex.parse_plain import LOG_HARD_LIMIT_BYTES, LOG_MAX_BYTES, parse_capped
 from kbindex.skip_reasons import ParseSkip, skip_message
 from kbindex.text_decode import decode_text
-from tests.unit.msg_pause import pause, ready
+from tests.unit.msg_pause import pause, ready, wide
 from tests.unit.outlook_msg import sample_msg
 
 BLOCKS = TypeAdapter(list[Block])
@@ -207,18 +207,37 @@ _REMOTE_HTML = """<html><body>
 
 def test_html_message_drops_remote_images():
     raw = sample_msg(subject="画像つき", body="", filename="", html=_REMOTE_HTML, display_to="受付 <front@example.test>")
-    page = _page_of(raw)
-    assert "https://example.invalid" not in page
-    assert "data:image/png;base64,AAAA" in page
-    assert "fetch(" not in page
-    assert "倉庫の合言葉は青葉です" in page
-    assert "front@example.test" in page
+    parts = _parts_of(raw)
+    assert "https://example.invalid" not in parts["body"]
+    assert "data:image/png;base64,AAAA" in parts["body"]
+    assert "fetch(" not in parts["body"]
+    assert "倉庫の合言葉は青葉です" in parts["body"]
     body = parse_msg(raw)
     _accept(body)
     texts = _msg_text(body)
     assert "倉庫の合言葉は青葉です" in texts
+    assert "front@example.test" in texts
     assert "example.invalid" not in texts
     assert all(block["type"] != "image" for block in body["blocks"])
+
+
+def test_message_table_keeps_its_row_number():
+    html_body = "<table><tr><th>列</th></tr><tr><td>値</td></tr></table>"
+    body = parse_msg(sample_msg(subject="件名", body="", filename="", html=html_body))
+    _accept(body)
+    row = next(block for block in body["blocks"] if block["type"] == "table_row")
+    assert row["citation_metadata"]["row_number"] == 1
+
+
+def test_message_keeps_text_that_is_not_in_a_paragraph():
+    html_body = (
+        "<html><body><div>仕切りの本文は青葉です</div>"
+        "<span>範囲の本文は紅葉です</span><font>書体の本文は黄葉です</font></body></html>"
+    )
+    texts = _msg_text(parse_msg(sample_msg(subject="件名あり", body="", filename="", html=html_body)))
+    assert "青葉" in texts
+    assert "紅葉" in texts
+    assert "黄葉" in texts
 
 
 def test_html_body_wins_over_rtf_and_plain():
@@ -272,6 +291,8 @@ def test_oversized_message_is_skipped():
 def test_slow_message_parse_is_skipped():
     assert MSG_PARSE_TIMEOUT_SECONDS == 60
     assert _run_bounded(ready, b"", MSG_PARSE_TIMEOUT_SECONDS) == "ready"
+    page = _run_bounded(wide, b"", 15)
+    assert page.startswith("あ") and len(page) == 200_000
     with pytest.raises(ParseSkip) as raised:
         _run_bounded(pause, b"", 0.8)
     assert raised.value.reason == "unreadable"

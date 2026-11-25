@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import html
 import multiprocessing
+import time
 from typing import Callable
 
 import compressed_rtf
@@ -12,6 +13,7 @@ from bs4 import BeautifulSoup
 from oxmsg import Message
 from striprtf.striprtf import rtf_to_text
 
+from kbindex.blocks import text_block
 from kbindex.parse_html import parse_html
 from kbindex.rtf_html import deencapsulate_html, fix_surrogates, is_encapsulated_html
 from kbindex.skip_reasons import ParseSkip
@@ -37,32 +39,36 @@ _IMAGE_TAGS = ("img", "picture", "source", "image", "input", "video", "audio", "
 def parse_msg(content: bytes) -> dict:
     if len(content) > _MAX_BYTES:
         raise ParseSkip("unreadable")
-    page = _run_bounded(_page_of, content, MSG_PARSE_TIMEOUT_SECONDS)
-    parsed = parse_html(page)
-    if not any(_visible(block) for block in parsed["blocks"]):
-        raise ParseSkip("unreadable")
-    return parsed
+    parts = _run_bounded(_parts_of, content, MSG_PARSE_TIMEOUT_SECONDS)
+    return _assemble(parts)
 
 
-def _run_bounded(fn: Callable[[bytes], str], content: bytes, seconds: float) -> str:
+def _run_bounded(fn: Callable[[bytes], object], content: bytes, seconds: float):
     ctx = multiprocessing.get_context("spawn")
     parent, child = ctx.Pipe(duplex=False)
     proc = ctx.Process(target=_child, args=(fn, content, child))
     proc.start()
     child.close()
-    proc.join(seconds)
-    if proc.is_alive():
-        proc.kill()
+    deadline = time.monotonic() + seconds
+    kind = None
+    payload = None
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if parent.poll(min(remaining, 0.2)):
+                kind, payload = parent.recv()
+                break
+            if not proc.is_alive():
+                if parent.poll(0):
+                    kind, payload = parent.recv()
+                break
+    finally:
+        if proc.is_alive():
+            proc.kill()
         proc.join(5)
         parent.close()
-        raise ParseSkip("unreadable")
-    try:
-        kind, payload = parent.recv()
-    except EOFError:
-        raise ParseSkip("unreadable") from None
-    finally:
-        parent.close()
-        proc.join(1)
     if kind == "ok":
         return payload
     if kind == "skip":
@@ -81,34 +87,50 @@ def _child(fn: Callable[[bytes], str], content: bytes, conn) -> None:
         conn.close()
 
 
-def _page_of(content: bytes) -> str:
+def _parts_of(content: bytes) -> dict:
     try:
         message = Message.load(bytes(content))
-        return _page(message)
     except Exception as exc:
         raise ParseSkip("unreadable") from exc
-
-
-def _page(message: Message) -> str:
-    subject = message.subject or ""
     sent: dt.datetime | None = message.sent_date
     to, cc = _addresses(message)
-    attachments = _attachments(message)
-    parts = [
-        '<!DOCTYPE html><html><head><meta charset="utf-8">',
-        f"<title>{html.escape(subject)}</title></head><body>",
-        f"<h1>{html.escape(subject)}</h1>" if subject else "",
-        _header("From", message.sender),
-        _header("To", "; ".join(to)),
-        _header("Cc", "; ".join(cc)),
-        _header("Date", sent.astimezone(dt.UTC).isoformat() if sent and sent.year > _NO_DATE_YEAR else None),
-        "<hr/>",
-        _body(message),
-    ]
-    if attachments:
-        parts += ["<h2>Attachments</h2><ul>", *attachments, "</ul>"]
-    parts.append("</body></html>")
-    return fix_surrogates("".join(parts))
+    return {
+        "subject": _clean(message.subject or ""),
+        "from": _clean(message.sender),
+        "to": _clean("; ".join(to)),
+        "cc": _clean("; ".join(cc)),
+        "date": sent.astimezone(dt.UTC).isoformat() if sent and sent.year > _NO_DATE_YEAR else None,
+        "body": _clean(_body(message)) or "",
+        "attachments": [_clean(line) or "" for line in _attachment_lines(message)],
+    }
+
+
+def _assemble(parts: dict) -> dict:
+    headers: list[dict] = []
+    if parts["subject"]:
+        headers.append(text_block(0, parts["subject"], "html", "heading"))
+    for label, key in (("From", "from"), ("To", "to"), ("Cc", "cc"), ("Date", "date")):
+        value = parts.get(key)
+        if value:
+            headers.append(text_block(len(headers), f"{label}: {value}", "html", "paragraph"))
+    parsed = parse_html(parts["body"]) if str(parts["body"]).strip() else {"blocks": []}
+    body_blocks = [block for block in parsed.get("blocks") or [] if _visible(block)]
+    footers = [text_block(0, line, "html", "list_item") for line in parts["attachments"]]
+    blocks = headers + body_blocks + footers
+    if not blocks:
+        raise ParseSkip("unreadable")
+    offset = len(headers)
+    for index, block in enumerate(blocks):
+        block["index"] = index
+    groups = parsed.get("block_groups") or []
+    for group in groups:
+        for item in group.get("children", {}).get("block_ranges", []):
+            item["start"] += offset
+            item["end"] += offset
+    body: dict = {"blocks": blocks}
+    if groups:
+        body["block_groups"] = groups
+    return body
 
 
 def _body(message: Message) -> str:
@@ -180,7 +202,7 @@ def _addresses(message: Message) -> tuple[list[str], list[str]]:
     return [item for item in to if item], [item for item in cc if item]
 
 
-def _attachments(message: Message) -> list[str]:
+def _attachment_lines(message: Message) -> list[str]:
     listed = []
     for attachment in message.attachments:
         props = attachment.properties
@@ -189,12 +211,14 @@ def _attachments(message: Message) -> list[str]:
         detail = attachment.mime_type or "application/octet-stream"
         if size:
             detail = f"{detail}, {size:,} bytes"
-        listed.append(f"<li>{html.escape(name)} ({html.escape(detail)})</li>")
+        listed.append(f"{name} ({detail})")
     return listed
 
 
-def _header(label: str, value: str | None) -> str:
-    return f"<p><strong>{label}:</strong> {html.escape(value)}</p>" if value else ""
+def _clean(value: str | None) -> str | None:
+    if not value:
+        return value
+    return fix_surrogates(value)
 
 
 def _visible(block: dict) -> bool:
