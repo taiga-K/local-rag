@@ -52,8 +52,8 @@ ipcMain.handle("localrag:sync-folders", async () => {
   }
 });
 
-// Drops every configured path of the KB and lets any running scan finish
-// before detaching, so no push lands after the records are removed.
+// Drops every configured path of the KB and waits for a running scan (without
+// starting one) before detaching, so no push lands after the records are removed.
 ipcMain.handle("localrag:detach-folder", async (_event, kbId: unknown) => {
   if (typeof kbId !== "string" || !kbId) {
     return { ok: false, error: "kb" };
@@ -77,7 +77,9 @@ ipcMain.handle("localrag:detach-folder", async (_event, kbId: unknown) => {
     if (!saved.ok) {
       return { ok: false, error: `settings: HTTP ${saved.status}` };
     }
-    await runSync().catch(() => []);
+    if (running) {
+      await running.catch(() => []);
+    }
     const detached = await fetch(`${API_BASE}/api/v1/kb/${encodeURIComponent(kbId)}/detach`, { method: "POST" });
     return { ok: detached.ok, error: detached.ok ? null : `detach: HTTP ${detached.status}` };
   } catch (error) {
