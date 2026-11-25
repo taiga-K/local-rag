@@ -247,10 +247,13 @@ class Engine:
                 update records
                 set indexing_status = 'IN_PROGRESS', failure_reason = null, updated_at = now()
                 where record_id = %s and version = %s and content_rev = %s and crash_retries = %s
-                  and indexing_status in ('QUEUED', 'IN_PROGRESS', 'COMPLETED', 'EMPTY', 'AUTO_INDEX_OFF')
+                  and (
+                    indexing_status in ('QUEUED', 'IN_PROGRESS')
+                    or (%s = 0 and indexing_status in ('COMPLETED', 'EMPTY', 'AUTO_INDEX_OFF'))
+                  )
                 returning stored_path, record_name, source_modified_ms, version, content_rev
                 """,
-                (rid, event_version, event_rev, event_crash_retries),
+                (rid, event_version, event_rev, event_crash_retries, event_crash_retries),
             ).fetchone()
             conn.commit()
         if updated is None:

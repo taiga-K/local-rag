@@ -384,7 +384,7 @@ def test_worker_does_not_claim_a_not_started_record():
     assert "NOT_STARTED" not in seen[0]
     assert "'FAILED'" not in seen[0]
     assert "crash_retries = %s" in seen[0]
-    assert params[0][3] == 1
+    assert params[0][3:] == (1, 1)
 
 
 def test_finish_does_not_refill_a_collection_after_cleanup(monkeypatch):
