@@ -19,6 +19,7 @@ from kbindex.rtf_html import deencapsulate_html, fix_surrogates, is_encapsulated
 from kbindex.skip_reasons import ParseSkip
 
 _MAX_BYTES = 64 * 1024 * 1024
+_TEXT_CAP = 1 << 20
 MSG_PARSE_TIMEOUT_SECONDS = 60
 _PID_RTF_COMPRESSED = 0x1009
 _PID_RECIPIENT_TYPE = 0x0C15
@@ -114,7 +115,7 @@ def _assemble(parts: dict) -> dict:
         if value:
             headers.append(text_block(len(headers), f"{label}: {value}", "html", "paragraph"))
     parsed = parse_html(parts["body"]) if str(parts["body"]).strip() else {"blocks": []}
-    body_blocks = [block for block in parsed.get("blocks") or [] if _visible(block)]
+    body_blocks = _fit_text([block for block in parsed.get("blocks") or [] if _visible(block)], parsed.get("block_groups") or [])
     footers = [text_block(0, line, "html", "list_item") for line in parts["attachments"]]
     blocks = headers + body_blocks + footers
     if not blocks:
@@ -131,6 +132,31 @@ def _assemble(parts: dict) -> dict:
     if groups:
         body["block_groups"] = groups
     return body
+
+
+def _fit_text(blocks: list[dict], groups: list[dict]) -> list[dict]:
+    if groups or len(blocks) != 1:
+        _reject_over_cap(blocks)
+        return blocks
+    data = blocks[0].get("data")
+    if not isinstance(data, str) or len(data) <= _TEXT_CAP:
+        return blocks
+    return [
+        text_block(0, data[start:start + _TEXT_CAP], "html", blocks[0].get("sub_type") or "paragraph")
+        for start in range(0, len(data), _TEXT_CAP)
+    ]
+
+
+def _reject_over_cap(blocks: list[dict]) -> None:
+    for block in blocks:
+        data = block.get("data")
+        if isinstance(data, str) and len(data) > _TEXT_CAP:
+            raise ParseSkip("unreadable")
+        if isinstance(data, dict):
+            text = data.get("row_natural_language_text") or ""
+            cells = data.get("cells") or []
+            if len(text) > _TEXT_CAP or any(len(cell) > _TEXT_CAP for cell in cells):
+                raise ParseSkip("unreadable")
 
 
 def _body(message: Message) -> str:

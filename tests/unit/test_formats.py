@@ -18,7 +18,7 @@ from kbindex.parse_csv import parse_csv
 from kbindex.parse_html import parse_html
 from kbindex.parse_json import parse_json
 from kbindex.parse_md import parse_markdown
-from kbindex.parse_msg import MSG_PARSE_TIMEOUT_SECONDS, _MAX_BYTES, _parts_of, _run_bounded, parse_msg
+from kbindex.parse_msg import MSG_PARSE_TIMEOUT_SECONDS, _MAX_BYTES, _TEXT_CAP, _parts_of, _run_bounded, parse_msg
 from kbindex.parse_plain import LOG_HARD_LIMIT_BYTES, LOG_MAX_BYTES, parse_capped
 from kbindex.skip_reasons import ParseSkip, skip_message
 from kbindex.text_decode import decode_text
@@ -227,6 +227,17 @@ def test_message_table_keeps_its_row_number():
     _accept(body)
     row = next(block for block in body["blocks"] if block["type"] == "table_row")
     assert row["citation_metadata"]["row_number"] == 1
+
+
+def test_long_div_body_stays_within_the_block_cap(monkeypatch):
+    assert _TEXT_CAP == 1 << 20
+    monkeypatch.setattr("kbindex.parse_msg._TEXT_CAP", 4)
+    body = parse_msg(sample_msg(subject="長い", body="", filename="", html="<div>仕切りの本文は青葉です</div>"))
+    _accept(body)
+    texts = [block["data"] for block in body["blocks"] if isinstance(block["data"], str)]
+    assert texts[0] == "長い"
+    assert all(len(item) <= 4 for item in texts)
+    assert "青葉" in "".join(texts)
 
 
 def test_message_keeps_text_that_is_not_in_a_paragraph():
