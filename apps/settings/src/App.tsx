@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { loadActivity, loadSettings, loadSummary, saveSettings, type Activity, type LocalSettings, type Summary } from "./api";
+import { ChatScreen } from "./ChatScreen";
 import { FolderScreen } from "./FolderScreen";
 import { Glyph } from "./glyphs";
 import { Overview } from "./Overview";
 import { SettingsScreen } from "./SettingsDialog";
 
-type Screen = { kind: "overview" } | { kind: "folder"; id: string } | { kind: "settings" };
+type Screen = { kind: "overview" } | { kind: "chat" } | { kind: "folder"; id: string } | { kind: "settings" };
 
 export function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -61,6 +62,9 @@ export function App() {
           <div className="brand">local-rag</div>
           <button className={screen.kind === "overview" ? "nav on" : "nav"} type="button" onClick={() => setScreen({ kind: "overview" })}>
             {Glyph.home}<span className="name">概要</span>
+          </button>
+          <button className={screen.kind === "chat" ? "nav on" : "nav"} type="button" onClick={() => setScreen({ kind: "chat" })}>
+            {Glyph.search}<span className="name">チャット</span>
           </button>
           <div className="label">取り込むフォルダ</div>
           {(summary?.folders ?? []).map((item) => (
@@ -158,6 +162,8 @@ function Body({
           onAddFolder={onAddFolder}
         />
       );
+    case "chat":
+      return <ChatScreen summary={summary} />;
     case "folder":
       return folder ? <FolderScreen key={folder.id} folder={folder} local={local} onReload={onReload} /> : null;
     case "settings":

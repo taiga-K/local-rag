@@ -71,6 +71,27 @@ export type RetrieveSettings = {
   customValue?: number;
 };
 
+export type RetrieveChunk = {
+  id: string;
+  text: string;
+  score: number;
+  similarity: number | null;
+  record: {
+    recordId: string;
+    name: string;
+    connector: string;
+    updatedAt: number | null;
+  };
+  citation: {
+    blockIndex: number | null;
+  };
+};
+
+export type RetrieveResult = {
+  chunks: RetrieveChunk[];
+  incomplete: boolean;
+};
+
 async function send(path: string, method: string, body?: unknown): Promise<unknown> {
   const response = await fetch(`${API_BASE}${path}`, {
     method,
@@ -172,4 +193,14 @@ export function saveDevice(device: string): Promise<unknown> {
 
 export function saveKeyword(enabled: boolean): Promise<EmbeddingInfo> {
   return send("/api/v1/engineer/keyword", "PUT", { enabled }) as Promise<EmbeddingInfo>;
+}
+
+export function retrieveChunks(query: string, kbId?: string): Promise<RetrieveResult> {
+  return send("/api/v1/retrieve", "POST", {
+    query,
+    limit: 8,
+    rewriteQuery: false,
+    maxChunksPerRecord: 3,
+    filters: kbId ? { kb: [kbId] } : {},
+  }) as Promise<RetrieveResult>;
 }

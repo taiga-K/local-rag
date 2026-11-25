@@ -335,7 +335,35 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length) or b"{}") if length else {}
         with LOCK:
+            if path == "/api/v1/retrieve":
+                query = str(payload.get("query", "")).strip()
+                kb_filter = ((payload.get("filters") or {}).get("kb") or [])
+                rows = []
+                for kb_id, records in STATE["records"].items():
+                    if kb_filter and kb_id not in kb_filter:
+                        continue
+                    rows.extend((kb_id, row) for row in records if row["indexingStatus"] == "COMPLETED")
+                chunks = []
+                for index, (kb_id, row) in enumerate(rows[:8]):
+                    text = f"{row['recordName']} に関する本文です。{query} への関連箇所として、取り込み済みチャンクの表示例を返します。"
+                    chunks.append({
+                        "id": f"demo-{index}",
+                        "text": text,
+                        "score": 0.5 / (index + 1),
+                        "similarity": max(0.35, 0.92 - index * 0.06),
+                        "record": {
+                            "recordId": row["externalRecordId"],
+                            "name": row["recordName"],
+                            "connector": kb_id,
+                            "updatedAt": row["sourceModifiedMs"],
+                        },
+                        "citation": {"url": None, "recordUrl": None, "pageNum": None, "blockIndex": 0},
+                    })
+                self._send(200, {"chunks": chunks[: int(payload.get("limit", 8) or 8)], "incomplete": False})
+                return
             if path == "/__demo/settled":
                 for rows in STATE["records"].values():
                     for row in rows:
