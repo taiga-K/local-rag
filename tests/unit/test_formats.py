@@ -6,6 +6,7 @@ import io
 import zipfile
 from pathlib import Path
 
+import compressed_rtf
 import pytest
 from pydantic import TypeAdapter
 
@@ -13,15 +14,16 @@ from kbindex.blocks import document
 from kbindex.contract import Block, Group, check_structure
 from kbindex.cli import unreadable_paths_to_drop
 from kbindex.formats import read_file
-from kbindex.parse_msg import parse_msg
-from tests.unit.outlook_msg import sample_msg
 from kbindex.parse_csv import parse_csv
 from kbindex.parse_html import parse_html
 from kbindex.parse_json import parse_json
 from kbindex.parse_md import parse_markdown
+from kbindex.parse_msg import MSG_PARSE_TIMEOUT_SECONDS, _MAX_BYTES, _page_of, _run_bounded, parse_msg
 from kbindex.parse_plain import LOG_HARD_LIMIT_BYTES, LOG_MAX_BYTES, parse_capped
 from kbindex.skip_reasons import ParseSkip, skip_message
 from kbindex.text_decode import decode_text
+from tests.unit.msg_pause import pause, ready
+from tests.unit.outlook_msg import sample_msg
 
 BLOCKS = TypeAdapter(list[Block])
 GROUPS = TypeAdapter(list[Group])
@@ -192,6 +194,115 @@ def test_message_keeps_subject_body_and_attachment_name_only():
 
 def test_deleted_unreadable_path_is_dropped():
     assert unreadable_paths_to_drop(["gone.zip", "still.bin"], {"still.bin"}) == ["gone.zip"]
+
+
+_REMOTE_HTML = """<html><body>
+<p>倉庫の合言葉は青葉です</p>
+<img src="https://example.invalid/secret-pixel.png" alt="図">
+<img src="data:image/png;base64,AAAA">
+<script>fetch("https://example.invalid/collect")</script>
+<p style="background: url(https://example.invalid/bg.png)">近傍の文</p>
+</body></html>"""
+
+
+def test_html_message_drops_remote_images():
+    raw = sample_msg(subject="画像つき", body="", filename="", html=_REMOTE_HTML, display_to="受付 <front@example.test>")
+    page = _page_of(raw)
+    assert "https://example.invalid" not in page
+    assert "data:image/png;base64,AAAA" in page
+    assert "fetch(" not in page
+    assert "倉庫の合言葉は青葉です" in page
+    assert "front@example.test" in page
+    body = parse_msg(raw)
+    _accept(body)
+    texts = _msg_text(body)
+    assert "倉庫の合言葉は青葉です" in texts
+    assert "example.invalid" not in texts
+    assert all(block["type"] != "image" for block in body["blocks"])
+
+
+def test_html_body_wins_over_rtf_and_plain():
+    raw = sample_msg(
+        subject="",
+        body="プレーンは使わない",
+        filename="",
+        html="<html><body><p>HTML本文の合言葉は朝顔です</p></body></html>",
+        rtf=_encapsulated("RTFは使わない"),
+    )
+    texts = _msg_text(parse_msg(raw))
+    assert "朝顔" in texts
+    assert "プレーンは使わない" not in texts
+    assert "RTFは使わない" not in texts
+
+
+def test_encapsulated_rtf_wins_over_plain():
+    raw = sample_msg(subject="", body="プレーンは使わない", filename="", rtf=_encapsulated("圧縮RTFの合言葉は青葉です"))
+    texts = _msg_text(parse_msg(raw))
+    assert "青葉" in texts
+    assert "プレーンは使わない" not in texts
+
+
+def test_plain_body_wins_over_rtf_text():
+    raw = sample_msg(subject="", body="プレーン本文の合言葉は夕顔です", filename="", rtf=_plain_rtf("RTFは使わない"))
+    texts = _msg_text(parse_msg(raw))
+    assert "夕顔" in texts
+    assert "RTFは使わない" not in texts
+
+
+def test_rtf_text_is_used_when_nothing_else_is_present():
+    raw = sample_msg(subject="", body="", filename="", rtf=_plain_rtf("RTFだけの本文は第五倉庫です"))
+    texts = _msg_text(parse_msg(raw))
+    assert "第五倉庫" in texts
+
+
+def test_attachment_lists_type_and_size_not_bytes():
+    raw = sample_msg(mime="text/plain", size=4096)
+    texts = _msg_text(parse_msg(raw))
+    assert "見積書.txt" in texts
+    assert "text/plain, 4,096 bytes" in texts
+    assert "SECRET-9F3C" not in texts
+
+
+def test_oversized_message_is_skipped():
+    with pytest.raises(ParseSkip) as raised:
+        parse_msg(b"x" * (_MAX_BYTES + 1))
+    assert raised.value.reason == "unreadable"
+
+
+def test_slow_message_parse_is_skipped():
+    assert MSG_PARSE_TIMEOUT_SECONDS == 60
+    assert _run_bounded(ready, b"", MSG_PARSE_TIMEOUT_SECONDS) == "ready"
+    with pytest.raises(ParseSkip) as raised:
+        _run_bounded(pause, b"", 0.8)
+    assert raised.value.reason == "unreadable"
+
+
+def _msg_text(body: dict) -> str:
+    parts = []
+    for block in body["blocks"]:
+        data = block["data"]
+        parts.append(data if isinstance(data, str) else str(data.get("row_natural_language_text") or ""))
+    return "\n".join(parts)
+
+
+def _rtf_text(text: str) -> bytes:
+    parts = []
+    for char in text:
+        if " " <= char < "\x7f" and char not in "\\{}":
+            parts.append(char)
+        else:
+            parts.append(f"\\u{ord(char)}?")
+    return "".join(parts).encode("ascii")
+
+
+def _encapsulated(sentence: str) -> bytes:
+    raw = b"{\\rtf1\\ansi\\fromhtml1{\\*\\htmltag64 <p>}" + _rtf_text(sentence) + b"{\\*\\htmltag72 </p>}}"
+    return compressed_rtf.compress(raw)
+
+
+def _plain_rtf(sentence: str) -> bytes:
+    raw = b"{\\rtf1\\ansi\\pard " + _rtf_text(sentence) + b"\\par}"
+    return compressed_rtf.compress(raw)
 
 
 def test_empty_document_helper():

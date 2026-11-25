@@ -18,34 +18,56 @@ def sample_msg(
     subject: str = "会議室の予約",
     body: str = "本文は第四会議室の鍵箱に入っています",
     filename: str = "見積書.txt",
+    html: str = "",
+    rtf: bytes = b"",
+    mime: str = "",
+    size: int | None = None,
+    display_to: str = "",
 ) -> bytes:
-    root_props = [(0x0037, 0x001F), (0x1000, 0x001F)]
-    streams: list[tuple[str, bytes, str | None]] = [
-        ("__properties_version1.0", _properties(32, *[(pid, ptyp) for pid, ptyp in root_props if _kept(pid, subject, body)]), None),
-        ("__substg1.0_0037001F", subject.encode("utf-16-le"), None),
-        ("__substg1.0_1000001F", body.encode("utf-16-le"), None),
-    ]
-    streams = [item for item in streams if item[0] == "__properties_version1.0" or item[1]]
+    props: list[tuple] = []
+    streams: list[tuple[str, bytes, str | None]] = []
+    if subject:
+        props.append((0x0037, 0x001F))
+        streams.append(("__substg1.0_0037001F", subject.encode("utf-16-le"), None))
+    if body:
+        props.append((0x1000, 0x001F))
+        streams.append(("__substg1.0_1000001F", body.encode("utf-16-le"), None))
+    if html:
+        props.append((0x3FDE, 0x0003, struct.pack("<I", 65001)))
+        props.append((0x1013, 0x0102))
+        streams.append(("__substg1.0_10130102", html.encode("utf-8"), None))
+    if rtf:
+        props.append((0x1009, 0x0102))
+        streams.append(("__substg1.0_10090102", rtf, None))
+    if display_to:
+        props.append((0x0E04, 0x001F))
+        streams.append(("__substg1.0_0E04001F", display_to.encode("utf-16-le"), None))
+    streams.insert(0, ("__properties_version1.0", _properties(32, *props), None))
     if filename:
+        attach_props: list[tuple] = [(0x3707, 0x001F), (0x3701, 0x0102)]
+        if mime:
+            attach_props.append((0x370E, 0x001F))
+        if size is not None:
+            attach_props.append((0x0E20, 0x0003, struct.pack("<I", size)))
         streams.extend([
-            ("__properties_version1.0", _properties(8, (0x3707, 0x001F), (0x3701, 0x0102)), "attach"),
+            ("__properties_version1.0", _properties(8, *attach_props), "attach"),
             ("__substg1.0_3707001F", filename.encode("utf-16-le"), "attach"),
             ("__substg1.0_37010102", _SECRET, "attach"),
         ])
+        if mime:
+            streams.append(("__substg1.0_370E001F", mime.encode("utf-16-le"), "attach"))
     return _cfb(streams)
 
 
-def _kept(pid: int, subject: str, body: str) -> bool:
-    if pid == 0x0037:
-        return bool(subject)
-    return bool(body)
-
-
-def _properties(header: int, *items: tuple[int, int]) -> bytes:
-    counts = struct.pack("<8x4I", 0, 1 if header == 32 else 0, 0, 1 if any(pid == 0x3707 for pid, _ptyp in items) else 0)
+def _properties(header: int, *items: tuple) -> bytes:
+    counts = struct.pack("<8x4I", 0, 1 if header == 32 else 0, 0, 1 if any(item[0] == 0x3707 for item in items) else 0)
     head = (counts + b"\x00" * header)[:header]
-    segments = b"".join(struct.pack("<HH", ptyp, pid) + b"\x00" * 12 for pid, ptyp in items)
-    return head + segments
+    parts = []
+    for item in items:
+        pid, ptyp = item[0], item[1]
+        payload = item[2] if len(item) > 2 else b"\x00" * 8
+        parts.append(struct.pack("<HH", ptyp, pid) + b"\x00" * 4 + payload[:8].ljust(8, b"\x00"))
+    return head + b"".join(parts)
 
 
 def _cfb(streams: list[tuple[str, bytes, str | None]]) -> bytes:

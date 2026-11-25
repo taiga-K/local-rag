@@ -17,6 +17,7 @@ dependencies = [
   "selectolax>=0.3",
   "python-oxmsg>=0.0.2",
   "compressed-rtf>=1.0.7",
+  "striprtf>=0.0.26",
 ]
 
 [project.optional-dependencies]

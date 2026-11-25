@@ -22,6 +22,7 @@ Versions below are the ones installed for the unit-test environment on 2026-11-1
 | selectolax | 1.0.2 | MIT |
 | python-oxmsg | 0.0.2 | MIT |
 | compressed-rtf | 1.0.7 | MIT |
+| striprtf | 0.0.35 | BSD-3-Clause |
 | pytest | 9.2.0 | MIT |
 
 `sentence-transformers` is the optional extra `embed`. It is not imported by the unit tests. Its license is Apache-2.0. The API image installs it at build time. The embedding model `cl-nagoya/ruri-v3-310m` is Apache-2.0.
