@@ -1,7 +1,7 @@
 """Large-block chunking stays streaming and long embedding batches stay small."""
 
 from kbindex.chunking import Piece, pieces_from_span_batches
-from kbindex.embed import RuriEmbedder, TOKEN_SPAN_SECTION_CHARS
+from kbindex.embed import FakeEmbedder, RuriEmbedder, TOKEN_SPAN_SECTION_CHARS
 from kbindex.pipeline import _stored_error, embed_batch_capacity, embedding_batches, refine_pieces_exactly
 
 
@@ -80,3 +80,10 @@ def test_exact_retokenization_splits_section_boundary_drift():
         (0, "x" * 8, 4),
         (1, "x" * 2, 1),
     ]
+
+
+def test_fake_embedder_stream_spans_in_bounded_batches():
+    batches = list(FakeEmbedder().token_span_batches("x" * 8193))
+
+    assert [len(batch) for batch in batches] == [8192, 1]
+    assert batches[1] == [(8192, 8193)]

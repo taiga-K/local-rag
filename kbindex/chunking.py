@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -66,7 +67,7 @@ def pieces_from_span_batches(
     """
     if window < 1:
         raise ValueError("window must be positive")
-    pending: list[tuple[int, int]] = []
+    pending = deque[tuple[int, int]]()
     start = 0
 
     def emit(group: list[tuple[int, int]], end: int) -> tuple[str, int] | None:
@@ -82,13 +83,12 @@ def pieces_from_span_batches(
     for batch in batches:
         pending.extend(batch)
         while len(pending) > window:
-            group = pending[:window]
-            del pending[:window]
+            group = [pending.popleft() for _ in range(window)]
             emitted = emit(group, group[-1][1])
             if emitted is not None:
                 yield emitted
     if pending:
-        emitted = emit(pending, len(text))
+        emitted = emit(list(pending), len(text))
         if emitted is not None:
             yield emitted
     elif start == 0 and text:

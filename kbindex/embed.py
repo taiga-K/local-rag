@@ -60,7 +60,9 @@ class FakeEmbedder(Embedder):
         return [(index, index + 1) for index in range(len(text))]
 
     def token_span_batches(self, text: str) -> Iterable[list[tuple[int, int]]]:
-        yield self.token_spans(text)
+        for base in range(0, len(text), 8192):
+            end = min(base + 8192, len(text))
+            yield [(index, index + 1) for index in range(base, end)]
 
 
 TOKEN_SPAN_SECTION_CHARS = 8192
