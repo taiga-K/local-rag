@@ -51,13 +51,15 @@ export function versionOf(mtimeMs: number): number {
   return Math.min(Math.max(Math.floor(mtimeMs * 1000), 0), MAX_VERSION);
 }
 
-export function listFiles(root: string, includeSubfolders: boolean): FolderFile[] {
+export function listFiles(root: string, includeSubfolders: boolean, unreadable: string[] = []): FolderFile[] {
   const out: FolderFile[] = [];
+  const relOf = (full: string) => path.relative(root, full).split(path.sep).join("/");
   const walk = (dir: string) => {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
+      unreadable.push(relOf(dir) || ".");
       return;
     }
     for (const entry of entries) {
@@ -76,9 +78,9 @@ export function listFiles(root: string, includeSubfolders: boolean): FolderFile[
       }
       try {
         const stat = fs.statSync(full);
-        out.push({ full, rel: path.relative(root, full).split(path.sep).join("/"), mtimeMs: stat.mtimeMs });
+        out.push({ full, rel: relOf(full), mtimeMs: stat.mtimeMs });
       } catch {
-        /* removed while scanning */
+        unreadable.push(relOf(full));
       }
     }
   };
@@ -261,7 +263,8 @@ export async function syncFolder(
   }
   const known = await serverVersions(fetcher, api, kbId);
   const seen = new Set<string>();
-  for (const file of listFiles(folder, includeSubfolders)) {
+  const unreadable: string[] = [];
+  for (const file of listFiles(folder, includeSubfolders, unreadable)) {
     const external = externalIdFor(file.rel);
     seen.add(external);
     const previous = known.get(external) ?? null;
@@ -296,6 +299,11 @@ export async function syncFolder(
     } else {
       result.errors.push(failure(file.rel, pushed.status, pushed.json));
     }
+  }
+  if (unreadable.length > 0) {
+    // A missing listing is not a deletion; keep the server copies until it reads again.
+    result.errors.push(...unreadable.map((rel) => `${rel}: 読めません`));
+    return result;
   }
   for (const external of known.keys()) {
     if (seen.has(external)) {

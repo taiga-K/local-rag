@@ -111,4 +111,19 @@ describe("folder sync", () => {
     expect(result.errors).toHaveLength(1);
     expect(api.calls).toEqual([]);
   });
+
+  it.skipIf(process.getuid?.() === 0)("keeps records under a subfolder it cannot list", async () => {
+    const locked = path.join(root, "locked");
+    fs.mkdirSync(locked);
+    fs.writeFileSync(path.join(locked, "kept.txt"), "k");
+    fs.chmodSync(locked, 0o000);
+    try {
+      const api = fakeApi([{ externalRecordId: externalIdFor("locked/kept.txt"), version: 1 }]);
+      const result = await syncFolder("http://api", root, true, api.fetcher);
+      expect(result.errors).toEqual(["locked: 読めません"]);
+      expect(api.calls.some((call) => call.method === "DELETE")).toBe(false);
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  });
 });
