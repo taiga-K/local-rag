@@ -396,19 +396,19 @@ PipesHub は push の正規化バイトをドキュメントストレージに�
 
 `eventType` は `newRecord`、`updateRecord`、`deleteRecord`、`reindexRecord` である。`reindexRecord` は PipesHub の再索引イベント名である（`config/constants/arangodb.py`）。`payload` は `recordId`、`kbId`、`externalRecordId`、`version`、`contentRev` を持つ。
 
-ワーカーはグループで読み、処理のあと XACK する。再配送は同じ終状態に寄る。`version` が行より古ければ ACK して捨てる。`deleteRecord` のあと行が無ければ、その `recordId` の点とポスティングを消して ACK する。
+ワーカーはグループで読み、処理のあと XACK する。再配送は同じ終状態に寄る。`version` が行より古ければ ACK して捨てる。`deleteRecord` のあと行が無ければ、その `recordId` の点とポスティングを消して ACK する。`IN_PROGRESS` のままワーカーが落ちたレコードは起動時に1度だけ `QUEUED` へ戻す。2回目は `FAILED` にし、無限再試行で取り込み中の表示が残るのを防ぐ。compose のワーカーは `restart: unless-stopped` である。
 
 Redis のイメージは 7.2 系に固定する。7.2 は BSD-3-Clause である。7.4 以降の RSALv2 と SSPL は使わない。
 
 ## チャンク
 
-方針は PipesHub の `EMBED_POINT_POLICY=B` である（`vectorstore.py` の `_build_text_documents`）。1テキストブロックが1点である。ブロックがモデル窓より長ければ、モデルのトークナイザで境界を切り、重なりは無い。文分割と重なり窓は方針 A なので使わない。
+方針は PipesHub の `EMBED_POINT_POLICY=B` である（`vectorstore.py` の `_build_text_documents`）。1テキストブロックが1点である。ブロックがモデル窓より長ければ、モデルのトークナイザで境界を切り、重なりは無い。文分割と重なり窓は方針 A なので使わない。長いブロックは 8,192 文字ずつトークン化し、全トークンの span を一度には作らない。粗い片だけをもう一度トークン化し直し、区切りでずれた境界を正確なトークン境界へ直す。片は連結すると元の本文へ戻り、欠落も重なりも無い。
 
 窓の長さは、ロードした SentenceTransformer の `max_seq_length` である。`ruri-v3-310m` の `max_position_embeddings` は 8192 である。PipesHub のホストモデル向け既定 8191（`PIPESHUB_EMBED_TOKEN_LIMIT`）は、ローカルモデルの窓が読めるときは使わない（`_model_window`）。
 
 空のテキストは点にしない。画像ブロックは点にしない。表の行は `cells` をタブ区切りにした文字列、それが無ければ `row_natural_language_text` を、テキストブロックと同じ規則で切る。
 
-切った各片は同じ `blockIndex` を持ち、`piece` だけが増える。
+切った各片は同じ `blockIndex` を持ち、`piece` だけが増える。埋め込みは片のトークン数に応じてバッチ幅を下げ、モデル窓に近い片は1件ずつ送る。既定の 32 件へ長文をまとめると、ワーカー メモリを使い切るためである。
 
 ## 埋め込み
 

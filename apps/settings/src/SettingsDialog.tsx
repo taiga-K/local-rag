@@ -12,6 +12,7 @@ import {
   type LocalSettings,
   type ThresholdLevel,
 } from "./api";
+import { ErrorToast } from "./ErrorToast";
 import { Glyph } from "./glyphs";
 import {
   THRESHOLD_ERROR,
@@ -344,7 +345,7 @@ export function SettingsScreen() {
           }
         />
       </section>
-      {note ? <p className="error-line">{note}</p> : null}
+      {note ? <div className="toast-stack"><ErrorToast message={note} onClose={() => setNote("")} /></div> : null}
     </div>
   );
 }

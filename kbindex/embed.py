@@ -8,6 +8,7 @@ applied.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 
 class Embedder:
     dim = 32
@@ -21,6 +22,12 @@ class Embedder:
 
     def token_spans(self, text: str) -> list[tuple[int, int]]:
         raise NotImplementedError
+
+    def token_span_batches(self, text: str) -> Iterable[list[tuple[int, int]]]:
+        raise NotImplementedError
+
+    def exact_token_spans(self, text: str) -> list[tuple[int, int]]:
+        return self.token_spans(text)
 
     def split_limit(self) -> int:
         return self.max_seq_length
@@ -52,6 +59,12 @@ class FakeEmbedder(Embedder):
     def token_spans(self, text: str) -> list[tuple[int, int]]:
         return [(index, index + 1) for index in range(len(text))]
 
+    def token_span_batches(self, text: str) -> Iterable[list[tuple[int, int]]]:
+        yield self.token_spans(text)
+
+
+TOKEN_SPAN_SECTION_CHARS = 8192
+
 
 class RuriEmbedder(Embedder):
     def __init__(self, model: str, device: str) -> None:
@@ -70,8 +83,26 @@ class RuriEmbedder(Embedder):
         return list(map(float, row))
 
     def token_spans(self, text: str) -> list[tuple[int, int]]:
+        return self.exact_token_spans(text)
+
+    def exact_token_spans(self, text: str) -> list[tuple[int, int]]:
         encoded = self._model.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
         return [(start, end) for start, end in encoded["offset_mapping"] if end > start]
+
+    def token_span_batches(self, text: str) -> Iterable[list[tuple[int, int]]]:
+        """Tokenize bounded character sections so a huge block does not allocate all input ids at once.
+
+        Sections are tokenized independently, so seam-adjacent tokens are a rough cut.
+        The pipeline retokenizes each bounded piece exactly before embedding it.
+        """
+        for base in range(0, len(text), TOKEN_SPAN_SECTION_CHARS):
+            section = text[base : base + TOKEN_SPAN_SECTION_CHARS]
+            encoded = self._model.tokenizer(section, add_special_tokens=False, return_offsets_mapping=True)
+            yield [
+                (base + start, base + end)
+                for start, end in encoded["offset_mapping"]
+                if end > start
+            ]
 
     def split_limit(self) -> int:
         return max(1, self.max_seq_length - 2)

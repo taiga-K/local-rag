@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { folderBridge, configuredFolder } from "./bridge";
 import { stamp } from "./format";
+import { ErrorToast } from "./ErrorToast";
 import { Glyph } from "./glyphs";
 import { failureLine, failureShort, remainingOf } from "./view";
 
@@ -183,7 +184,7 @@ export function FolderScreen({
           ) : null
         ) : null}
       </div>
-      {note ? <p className="error-line">{note}</p> : null}
+      {note ? <div className="toast-stack"><ErrorToast message={note} onClose={() => setNote("")} /></div> : null}
     </div>
   );
 }

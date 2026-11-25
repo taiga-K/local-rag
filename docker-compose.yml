@@ -54,6 +54,7 @@ services:
   worker:
     build: .
     command: ["kbindex-worker"]
+    restart: unless-stopped
     network_mode: host
     environment:
       DATABASE_URL: postgresql://kbindex:kbindex@127.0.0.1:54329/kbindex
