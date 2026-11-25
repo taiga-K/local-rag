@@ -103,9 +103,16 @@ export function FolderScreen({
                   type="button"
                   onClick={() => {
                     setMenu(false);
+                    const viaApp = folderBridge()?.detachFolder;
                     const keep = local && path ? { ...local, folders: local.folders.filter((item) => item !== path) } : null;
-                    void (keep ? saveSettings(keep) : Promise.resolve(null))
-                      .then(() => detachKb(folder.id))
+                    const detach = viaApp
+                      ? viaApp(folder.id).then((result) => {
+                          if (!result.ok) {
+                            throw new Error(result.error || "外せませんでした");
+                          }
+                        })
+                      : (keep ? saveSettings(keep) : Promise.resolve(null)).then(() => detachKb(folder.id));
+                    void detach
                       .then(() => onReload())
                       .catch((error: unknown) => {
                         setNote(error instanceof Error ? error.message : "外せませんでした");

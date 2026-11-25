@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { syncAll, type FolderResult } from "./folderSync.js";
+import { kbIdFor, syncAll, type FolderResult } from "./folderSync.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const API_BASE = process.env.KBINDEX_API ?? "http://127.0.0.1:43123";
@@ -49,6 +49,36 @@ ipcMain.handle("localrag:sync-folders", async () => {
     return { ok: results.every((item) => item.errors.length === 0), results, error: null };
   } catch (error) {
     return { ok: false, results: [], error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// Drops every configured path of the KB and lets any running scan finish
+// before detaching, so no push lands after the records are removed.
+ipcMain.handle("localrag:detach-folder", async (_event, kbId: unknown) => {
+  if (typeof kbId !== "string" || !kbId) {
+    return { ok: false, error: "kb" };
+  }
+  try {
+    const current = await fetch(`${API_BASE}/api/v1/settings/local`);
+    const settings = (await current.json()) as { folders?: unknown; includeSubfolders?: unknown; autoIndex?: unknown };
+    const folders = Array.isArray(settings.folders) ? settings.folders.filter((item): item is string => typeof item === "string") : [];
+    const saved = await fetch(`${API_BASE}/api/v1/settings/local`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        folders: folders.filter((folder) => kbIdFor(folder) !== kbId),
+        includeSubfolders: settings.includeSubfolders !== false,
+        autoIndex: settings.autoIndex !== false,
+      }),
+    });
+    if (!saved.ok) {
+      return { ok: false, error: `settings: HTTP ${saved.status}` };
+    }
+    await runSync().catch(() => []);
+    const detached = await fetch(`${API_BASE}/api/v1/kb/${encodeURIComponent(kbId)}/detach`, { method: "POST" });
+    return { ok: detached.ok, error: detached.ok ? null : `detach: HTTP ${detached.status}` };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
 

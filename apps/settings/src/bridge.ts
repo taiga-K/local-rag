@@ -9,6 +9,7 @@ export type SyncFoldersResult = {
 type LocalRagBridge = {
   openPath: (folder: string) => Promise<OpenPathResult>;
   syncFolders?: () => Promise<SyncFoldersResult>;
+  detachFolder?: (kbId: string) => Promise<OpenPathResult>;
 };
 
 export function folderBridge(): LocalRagBridge | null {
