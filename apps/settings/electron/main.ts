@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,6 +18,18 @@ function insideFolder(root: string, target: string): boolean {
   const relative = path.relative(base, full);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
+
+ipcMain.handle("localrag:pick-folder", async (event) => {
+  const options = {
+    title: "取り込むフォルダを選択",
+    buttonLabel: "追加",
+    properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory">,
+  };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  const folder = result.filePaths[0] ?? null;
+  return { ok: !result.canceled && folder !== null, canceled: result.canceled, path: folder, error: null };
+});
 
 ipcMain.handle("localrag:open-path", async (_event, raw: unknown) => {
   if (typeof raw !== "string" || !raw.trim()) {

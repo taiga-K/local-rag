@@ -1,12 +1,14 @@
 export type OpenPathResult = { ok: boolean; error: string | null };
+export type PickFolderResult = { ok: boolean; canceled: boolean; path: string | null; error: string | null };
 
 type LocalRagBridge = {
   openPath: (folder: string) => Promise<OpenPathResult>;
+  pickFolder: () => Promise<PickFolderResult>;
 };
 
 export function folderBridge(): LocalRagBridge | null {
   const candidate = (window as Window & { localrag?: LocalRagBridge }).localrag;
-  if (!candidate || typeof candidate.openPath !== "function") {
+  if (!candidate || typeof candidate.openPath !== "function" || typeof candidate.pickFolder !== "function") {
     return null;
   }
   return candidate;
