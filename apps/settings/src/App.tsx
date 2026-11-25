@@ -7,6 +7,7 @@ import { Overview } from "./Overview";
 import { SettingsScreen } from "./SettingsDialog";
 
 type Screen = { kind: "overview" } | { kind: "chat" } | { kind: "folder"; id: string } | { kind: "settings" };
+type BodyScreen = Exclude<Screen, { kind: "chat" }>;
 
 export function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -111,17 +112,24 @@ export function App() {
       <main className="main">
         {error ? <p className="error-line">{error}</p> : null}
         {summary ? (
-          <Body
-            screen={screen}
-            summary={summary}
-            folder={folder}
-            local={local}
-            activity={activity}
-            showAll={showAll}
-            onShowAll={() => setShowAll(true)}
-            onReload={refresh}
-            onAddFolder={() => setAdding(true)}
-          />
+          <>
+            <div style={{ display: screen.kind === "chat" ? "block" : "none" }}>
+              <ChatScreen summary={summary} />
+            </div>
+            {screen.kind === "chat" ? null : (
+              <Body
+                screen={screen}
+                summary={summary}
+                folder={folder}
+                local={local}
+                activity={activity}
+                showAll={showAll}
+                onShowAll={() => setShowAll(true)}
+                onReload={refresh}
+                onAddFolder={() => setAdding(true)}
+              />
+            )}
+          </>
         ) : null}
       </main>
     </div>
@@ -139,7 +147,7 @@ function Body({
   onReload,
   onAddFolder,
 }: {
-  screen: Screen;
+  screen: BodyScreen;
   summary: Summary;
   folder: Summary["folders"][number] | null;
   local: LocalSettings | null;
@@ -162,8 +170,6 @@ function Body({
           onAddFolder={onAddFolder}
         />
       );
-    case "chat":
-      return <ChatScreen summary={summary} />;
     case "folder":
       return folder ? <FolderScreen key={folder.id} folder={folder} local={local} onReload={onReload} /> : null;
     case "settings":
