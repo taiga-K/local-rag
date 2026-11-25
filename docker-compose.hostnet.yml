@@ -1,0 +1,18 @@
+# Linux only. Use when the compose bridge does not forward container-to-container
+# packets (for example some dockerd nftables setups):
+#   docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up --build
+# Docker Desktop (Windows, macOS) must not use this file.
+services:
+  api:
+    network_mode: host
+    ports: !reset []
+    environment:
+      DATABASE_URL: postgresql://kbindex:kbindex@127.0.0.1:54329/kbindex
+      REDIS_URL: redis://127.0.0.1:63799/0
+      QDRANT_URL: http://127.0.0.1:46333
+  worker:
+    network_mode: host
+    environment:
+      DATABASE_URL: postgresql://kbindex:kbindex@127.0.0.1:54329/kbindex
+      REDIS_URL: redis://127.0.0.1:63799/0
+      QDRANT_URL: http://127.0.0.1:46333

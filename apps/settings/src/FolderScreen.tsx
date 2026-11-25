@@ -4,6 +4,7 @@ import {
   loadRecords,
   reprocessRecord,
   retryFailed,
+  saveSettings,
   type FolderCount,
   type LocalSettings,
   type RecordRow,
@@ -102,9 +103,13 @@ export function FolderScreen({
                   type="button"
                   onClick={() => {
                     setMenu(false);
-                    void detachKb(folder.id).then(() => onReload()).catch((error: unknown) => {
-                      setNote(error instanceof Error ? error.message : "外せませんでした");
-                    });
+                    const keep = local && path ? { ...local, folders: local.folders.filter((item) => item !== path) } : null;
+                    void (keep ? saveSettings(keep) : Promise.resolve(null))
+                      .then(() => detachKb(folder.id))
+                      .then(() => onReload())
+                      .catch((error: unknown) => {
+                        setNote(error instanceof Error ? error.message : "外せませんでした");
+                      });
                   }}
                 >
                   取り込みから外す

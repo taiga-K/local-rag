@@ -25,16 +25,19 @@ services:
     image: qdrant/qdrant:v1.15.0
     ports:
       - "46333:6333"
-  # api and worker use the host network so they can reach the published
-  # ports. On this VM the compose bridge does not forward container-to-container
-  # packets (dockerd nftables setup). The same URLs work when the ports are published.
+  # api and worker talk to the other services over the compose network.
+  # network_mode: host does not work on Docker Desktop for Windows and macOS:
+  # the "host" is the Linux VM, so 127.0.0.1:43123 on Windows never reaches it.
+  # Linux machines whose bridge drops container-to-container packets can add
+  # docker-compose.hostnet.yml.
   api:
     build: .
-    network_mode: host
+    ports:
+      - "127.0.0.1:43123:43123"
     environment:
-      DATABASE_URL: postgresql://kbindex:kbindex@127.0.0.1:54329/kbindex
-      REDIS_URL: redis://127.0.0.1:63799/0
-      QDRANT_URL: http://127.0.0.1:46333
+      DATABASE_URL: postgresql://kbindex:kbindex@postgres:5432/kbindex
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
       DATA_DIR: /data/records
       HF_HOME: /data/hf
       PORT: "43123"
@@ -44,6 +47,11 @@ services:
       - hf:/data/hf
       - ./kbindex:/app/kbindex
       - ./config.yaml:/app/config.yaml
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:43123/api/v1/settings/local', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,11 +62,10 @@ services:
   worker:
     build: .
     command: ["kbindex-worker"]
-    network_mode: host
     environment:
-      DATABASE_URL: postgresql://kbindex:kbindex@127.0.0.1:54329/kbindex
-      REDIS_URL: redis://127.0.0.1:63799/0
-      QDRANT_URL: http://127.0.0.1:46333
+      DATABASE_URL: postgresql://kbindex:kbindex@postgres:5432/kbindex
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
       DATA_DIR: /data/records
       HF_HOME: /data/hf
       KBINDEX_CONFIG: /app/config.yaml
@@ -69,7 +76,7 @@ services:
       - ./config.yaml:/app/config.yaml
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
 volumes:
   records:
   hf:

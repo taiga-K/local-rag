@@ -12,6 +12,7 @@ import {
   type LocalSettings,
   type ThresholdLevel,
 } from "./api";
+import { syncFolders } from "./bridge";
 import { Glyph } from "./glyphs";
 import {
   THRESHOLD_ERROR,
@@ -183,7 +184,11 @@ export function SettingsScreen() {
                 }
                 const saved = { ...local, autoIndex: next };
                 setLocal(saved);
-                void saveSettings(saved).catch((error: unknown) => {
+                void saveSettings(saved).then(() => (next ? syncFolders() : "")).then((problem) => {
+                  if (problem) {
+                    setNote(problem);
+                  }
+                }).catch((error: unknown) => {
                   setLocal(local);
                   setNote(error instanceof Error ? error.message : "保存に失敗しました");
                 });

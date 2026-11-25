@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { loadActivity, loadSettings, loadSummary, saveSettings, type Activity, type LocalSettings, type Summary } from "./api";
+import { syncFolders } from "./bridge";
 import { FolderScreen } from "./FolderScreen";
 import { Glyph } from "./glyphs";
 import { Overview } from "./Overview";
@@ -16,6 +17,7 @@ export function App() {
   const [adding, setAdding] = useState(false);
   const [path, setPath] = useState("");
   const [error, setError] = useState("");
+  const [syncProblem, setSyncProblem] = useState("");
 
   const refresh = useCallback(async () => {
     const [nextSummary, nextLocal, nextActivity] = await Promise.all([
@@ -28,6 +30,12 @@ export function App() {
     setActivity(nextActivity);
     setError("");
   }, [showAll]);
+
+  const checkNow = useCallback(async () => {
+    const problem = await syncFolders().catch((cause: unknown) => (cause instanceof Error ? cause.message : "取り込めませんでした"));
+    setSyncProblem(problem);
+    await refresh();
+  }, [refresh]);
 
   useEffect(() => {
     let stop = false;
@@ -92,6 +100,7 @@ export function App() {
                   setLocal(saved);
                   setPath("");
                   setAdding(false);
+                  return checkNow();
                 }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "保存に失敗しました"));
               }}
             >
@@ -106,6 +115,7 @@ export function App() {
       </aside>
       <main className="main">
         {error ? <p className="error-line">{error}</p> : null}
+        {syncProblem ? <p className="error-line">{syncProblem}</p> : null}
         {summary ? (
           <Body
             screen={screen}
@@ -116,6 +126,7 @@ export function App() {
             showAll={showAll}
             onShowAll={() => setShowAll(true)}
             onReload={refresh}
+            onCheckNow={checkNow}
             onAddFolder={() => setAdding(true)}
           />
         ) : null}
@@ -133,6 +144,7 @@ function Body({
   showAll,
   onShowAll,
   onReload,
+  onCheckNow,
   onAddFolder,
 }: {
   screen: Screen;
@@ -143,6 +155,7 @@ function Body({
   showAll: boolean;
   onShowAll: () => void;
   onReload: () => Promise<void>;
+  onCheckNow: () => Promise<void>;
   onAddFolder: () => void;
 }) {
   switch (screen.kind) {
@@ -155,6 +168,7 @@ function Body({
           showAll={showAll}
           onShowAll={onShowAll}
           onReload={onReload}
+          onCheckNow={onCheckNow}
           onAddFolder={onAddFolder}
         />
       );

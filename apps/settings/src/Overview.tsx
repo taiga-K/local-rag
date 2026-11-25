@@ -30,6 +30,7 @@ export function Overview({
   showAll,
   onShowAll,
   onReload,
+  onCheckNow,
   onAddFolder,
 }: {
   summary: Summary;
@@ -38,6 +39,7 @@ export function Overview({
   showAll: boolean;
   onShowAll: () => void;
   onReload: () => Promise<void>;
+  onCheckNow?: () => Promise<void>;
   onAddFolder: () => void;
 }) {
   const importing = !summary.pause.active && (summary.active > 0 || summary.queued > 0);
@@ -97,7 +99,7 @@ export function Overview({
         menuButton={menuButton}
         onToggle={() => setMenu((open) => !open)}
         onPause={pause}
-        onReload={onReload}
+        onReload={onCheckNow ?? onReload}
       />
       {failed.length > 0 ? (
         <section>

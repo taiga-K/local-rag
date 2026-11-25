@@ -8,7 +8,7 @@
 docker compose up --build
 ```
 
-API は `http://127.0.0.1:43123` で待ち受ける。初回の起動では `cl-nagoya/ruri-v3-310m` を Hugging Face からダウンロードする。`HF_HOME` の中身はボリューム `hf` に残る。Redis のイメージは 7.2 系で、ライセンスは BSD-3-Clause である。
+API は `http://127.0.0.1:43123` で待ち受ける。api と worker は compose のネットワークで Postgres、Redis、Qdrant に接続し、API のポートだけを `127.0.0.1` に公開する。Docker Desktop（Windows、macOS）でもこのまま動く。Linux でブリッジがコンテナ間のパケットを通さない環境では、`docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up --build` で api と worker をホストのネットワークに置く。初回の起動では `cl-nagoya/ruri-v3-310m` を Hugging Face からダウンロードする。`HF_HOME` の中身はボリューム `hf` に残る。Redis のイメージは 7.2 系で、ライセンスは BSD-3-Clause である。
 
 モデルをダウンロードせずに動かすときは `config.test.yaml` を使う。`embedding.backend` は `fake` である。
 
@@ -23,6 +23,12 @@ kbindex-api
 ```
 
 別の端末で `kbindex-worker` を同じ環境変数で起動する。
+
+## デスクトップアプリのフォルダ取り込み
+
+API は Docker の中で動くので、Windows のフォルダを直接は読めない。`apps/settings` の Electron アプリが、設定に保存したフォルダを読み、`.txt`、`.md`、`.html` を `POST /api/v1/kb/{kb_id}/records` で送る。フォルダごとに知識ベースを 1 つ作る。id はフォルダの絶対パスから作り、名前はフォルダ名である。消えたファイルは `DELETE ...?source=sync` で消す。
+
+取り込みは、フォルダを追加したとき、概要の「今すぐ確認」を押したとき、アプリの起動時に行う。「フォルダの変更を自動で取り込む」がオンのあいだは 30 秒ごとにも確認する。更新日時が API の `version` より新しいファイルだけを送る。UTF-8 で読めないファイルは Shift_JIS として読む。
 
 ## サンプルを入れる
 
