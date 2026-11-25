@@ -37,6 +37,7 @@ kbindex-maintain = "kbindex.maintain:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
   "integration: needs Postgres, Redis, and Qdrant. Skipped unless INTEGRATION=1",
   "slow: loads cl-nagoya/ruri-v3-310m. Skipped unless SLOW=1",
