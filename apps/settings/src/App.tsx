@@ -77,11 +77,12 @@ export function App() {
         setError(picked.error || "フォルダを選択できませんでした");
         return;
       }
-      if (local.folders.includes(selected)) {
+      const current = await loadSettings();
+      if (current.folders.includes(selected)) {
         setError("そのフォルダはすでに追加されています");
         return;
       }
-      const saved = await saveSettings({ ...local, folders: [...local.folders, selected] });
+      const saved = await saveSettings({ ...current, folders: [...current.folders, selected] });
       setLocal(saved);
       await refresh();
     } catch (cause: unknown) {
