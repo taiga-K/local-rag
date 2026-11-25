@@ -15,7 +15,8 @@ export function App() {
   const [screen, setScreen] = useState<Screen>({ kind: "overview" });
   const [showAll, setShowAll] = useState(false);
   const [pickingFolder, setPickingFolder] = useState(false);
-  const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState("");
 
   const refresh = useCallback(async () => {
     const [nextSummary, nextLocal, nextActivity] = await Promise.all([
@@ -26,7 +27,7 @@ export function App() {
     setSummary(nextSummary);
     setLocal(nextLocal);
     setActivity(nextActivity);
-    setError("");
+    setLoadError("");
   }, [showAll]);
 
   useEffect(() => {
@@ -34,7 +35,7 @@ export function App() {
     const run = () => {
       void refresh().catch((cause: unknown) => {
         if (!stop) {
-          setError(cause instanceof Error ? cause.message : "設定を読めません");
+          setLoadError(cause instanceof Error ? cause.message : "設定を読めません");
         }
       });
     };
@@ -59,14 +60,14 @@ export function App() {
     }
     const bridge = folderBridge();
     if (!bridge) {
-      setError("フォルダ選択はデスクトップアプリで使えます");
+      setActionError("フォルダ選択はデスクトップアプリで使えます");
       return;
     }
     if (!local) {
       return;
     }
     setPickingFolder(true);
-    setError("");
+    setActionError("");
     try {
       const picked = await bridge.pickFolder();
       if (picked.canceled) {
@@ -74,26 +75,27 @@ export function App() {
       }
       const selected = picked.path ?? "";
       if (!picked.ok || !selected) {
-        setError(picked.error || "フォルダを選択できませんでした");
+        setActionError(picked.error || "フォルダを選択できませんでした");
         return;
       }
       const current = await loadSettings();
       const selectedKey = folderPathKey(selected);
       if (current.folders.some((folder) => folderPathKey(folder) === selectedKey)) {
-        setError("そのフォルダはすでに追加されています");
+        setActionError("そのフォルダはすでに追加されています");
         return;
       }
       const saved = await saveSettings({ ...current, folders: [...current.folders, selected] });
       setLocal(saved);
       await refresh();
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "フォルダを追加できませんでした");
+      setActionError(cause instanceof Error ? cause.message : "フォルダを追加できませんでした");
     } finally {
       setPickingFolder(false);
     }
   }
 
   const importing = summary != null && !summary.pause.active && (summary.active > 0 || summary.queued > 0);
+  const error = actionError || loadError;
   return (
     <div className="app">
       <aside className="side">
