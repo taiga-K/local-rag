@@ -15,6 +15,7 @@ export function ChatScreen({ summary }: { summary: Summary }) {
   const nextId = useRef(1);
   const endRef = useRef<HTMLDivElement>(null);
   const folderNames = new Map(summary.folders.map((folder) => [folder.id, folder.name]));
+  const selectedKbId = summary.folders.some((folder) => folder.id === kbId) ? kbId : "";
 
   useEffect(() => {
     const last = entries.at(-1);
@@ -36,7 +37,7 @@ export function ChatScreen({ summary }: { summary: Summary }) {
     setQuery("");
     setSending(true);
     try {
-      const result = await retrieveChunks(text, kbId || undefined);
+      const result = await retrieveChunks(text, selectedKbId || undefined);
       setEntries((current) => [...current, { id: resultId, role: "result", query: text, result }]);
     } catch (cause: unknown) {
       const error = cause instanceof Error ? cause.message : "検索に失敗しました";
@@ -67,7 +68,7 @@ export function ChatScreen({ summary }: { summary: Summary }) {
         </div>
         <label className="chat-scope">
           <span>検索対象</span>
-          <select value={kbId} onChange={(event) => setKbId(event.target.value)}>
+          <select value={selectedKbId} onChange={(event) => setKbId(event.target.value)}>
             <option value="">すべてのフォルダ</option>
             {summary.folders.map((folder) => (
               <option key={folder.id} value={folder.id}>{folder.name}</option>
