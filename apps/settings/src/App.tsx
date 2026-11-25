@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { loadActivity, loadSettings, loadSummary, saveSettings, type Activity, type LocalSettings, type Summary } from "./api";
+import { folderBridge, folderPathKey } from "./bridge";
 import { FolderScreen } from "./FolderScreen";
 import { Glyph } from "./glyphs";
 import { Overview } from "./Overview";
@@ -13,9 +14,9 @@ export function App() {
   const [activity, setActivity] = useState<Activity>({ hasMore: false, events: [] });
   const [screen, setScreen] = useState<Screen>({ kind: "overview" });
   const [showAll, setShowAll] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [path, setPath] = useState("");
-  const [error, setError] = useState("");
+  const [pickingFolder, setPickingFolder] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState("");
 
   const refresh = useCallback(async () => {
     const [nextSummary, nextLocal, nextActivity] = await Promise.all([
@@ -26,7 +27,7 @@ export function App() {
     setSummary(nextSummary);
     setLocal(nextLocal);
     setActivity(nextActivity);
-    setError("");
+    setLoadError("");
   }, [showAll]);
 
   useEffect(() => {
@@ -34,7 +35,7 @@ export function App() {
     const run = () => {
       void refresh().catch((cause: unknown) => {
         if (!stop) {
-          setError(cause instanceof Error ? cause.message : "設定を読めません");
+          setLoadError(cause instanceof Error ? cause.message : "設定を読めません");
         }
       });
     };
@@ -53,7 +54,48 @@ export function App() {
     }
   }, [screen, summary, folder]);
 
+  async function addFolder() {
+    if (pickingFolder) {
+      return;
+    }
+    const bridge = folderBridge();
+    if (!bridge) {
+      setActionError("フォルダ選択はデスクトップアプリで使えます");
+      return;
+    }
+    if (!local) {
+      return;
+    }
+    setPickingFolder(true);
+    setActionError("");
+    try {
+      const picked = await bridge.pickFolder();
+      if (picked.canceled) {
+        return;
+      }
+      const selected = picked.path ?? "";
+      if (!picked.ok || !selected) {
+        setActionError(picked.error || "フォルダを選択できませんでした");
+        return;
+      }
+      const current = await loadSettings();
+      const selectedKey = folderPathKey(selected);
+      if (current.folders.some((folder) => folderPathKey(folder) === selectedKey)) {
+        setActionError("そのフォルダはすでに追加されています");
+        return;
+      }
+      const saved = await saveSettings({ ...current, folders: [...current.folders, selected] });
+      setLocal(saved);
+      await refresh();
+    } catch (cause: unknown) {
+      setActionError(cause instanceof Error ? cause.message : "フォルダを追加できませんでした");
+    } finally {
+      setPickingFolder(false);
+    }
+  }
+
   const importing = summary != null && !summary.pause.active && (summary.active > 0 || summary.queued > 0);
+  const error = actionError || loadError;
   return (
     <div className="app">
       <aside className="side">
@@ -76,29 +118,9 @@ export function App() {
               {!importing && item.failed > 0 ? <span className="mark bad">{Glyph.errSmall}</span> : null}
             </button>
           ))}
-          <button className="nav add" type="button" onClick={() => setAdding((open) => !open)}>
+          <button className="nav add" type="button" disabled={pickingFolder || !local} onClick={() => void addFolder()}>
             {Glyph.plus}<span className="name">フォルダを追加</span>
           </button>
-          {adding ? (
-            <form
-              className="add-row"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!local || !path.trim()) {
-                  return;
-                }
-                const next = { ...local, folders: [...local.folders, path.trim()] };
-                void saveSettings(next).then((saved) => {
-                  setLocal(saved);
-                  setPath("");
-                  setAdding(false);
-                }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "保存に失敗しました"));
-              }}
-            >
-              <input aria-label="追加するフォルダ" value={path} onChange={(event) => setPath(event.target.value)} />
-              <button className="btn sm" type="submit">追加</button>
-            </form>
-          ) : null}
         </div>
         <button className={screen.kind === "settings" ? "nav on" : "nav"} type="button" onClick={() => setScreen({ kind: "settings" })}>
           {Glyph.gear}<span className="name">設定</span>
@@ -116,7 +138,7 @@ export function App() {
             showAll={showAll}
             onShowAll={() => setShowAll(true)}
             onReload={refresh}
-            onAddFolder={() => setAdding(true)}
+            onAddFolder={() => void addFolder()}
           />
         ) : null}
       </main>
