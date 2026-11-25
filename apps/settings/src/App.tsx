@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { loadActivity, loadSettings, loadSummary, saveSettings, type Activity, type LocalSettings, type Summary } from "./api";
+import { ChatScreen } from "./ChatScreen";
 import { FolderScreen } from "./FolderScreen";
 import { Glyph } from "./glyphs";
 import { Overview } from "./Overview";
 import { SettingsScreen } from "./SettingsDialog";
 
-type Screen = { kind: "overview" } | { kind: "folder"; id: string } | { kind: "settings" };
+type Screen = { kind: "overview" } | { kind: "chat" } | { kind: "folder"; id: string } | { kind: "settings" };
+type BodyScreen = Exclude<Screen, { kind: "chat" }>;
 
 export function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -62,6 +64,9 @@ export function App() {
           <button className={screen.kind === "overview" ? "nav on" : "nav"} type="button" onClick={() => setScreen({ kind: "overview" })}>
             {Glyph.home}<span className="name">概要</span>
           </button>
+          <button className={screen.kind === "chat" ? "nav on" : "nav"} type="button" onClick={() => setScreen({ kind: "chat" })}>
+            {Glyph.search}<span className="name">チャット</span>
+          </button>
           <div className="label">取り込むフォルダ</div>
           {(summary?.folders ?? []).map((item) => (
             <button
@@ -107,17 +112,24 @@ export function App() {
       <main className="main">
         {error ? <p className="error-line">{error}</p> : null}
         {summary ? (
-          <Body
-            screen={screen}
-            summary={summary}
-            folder={folder}
-            local={local}
-            activity={activity}
-            showAll={showAll}
-            onShowAll={() => setShowAll(true)}
-            onReload={refresh}
-            onAddFolder={() => setAdding(true)}
-          />
+          <>
+            <div style={{ display: screen.kind === "chat" ? "block" : "none" }}>
+              <ChatScreen summary={summary} />
+            </div>
+            {screen.kind === "chat" ? null : (
+              <Body
+                screen={screen}
+                summary={summary}
+                folder={folder}
+                local={local}
+                activity={activity}
+                showAll={showAll}
+                onShowAll={() => setShowAll(true)}
+                onReload={refresh}
+                onAddFolder={() => setAdding(true)}
+              />
+            )}
+          </>
         ) : null}
       </main>
     </div>
@@ -135,7 +147,7 @@ function Body({
   onReload,
   onAddFolder,
 }: {
-  screen: Screen;
+  screen: BodyScreen;
   summary: Summary;
   folder: Summary["folders"][number] | null;
   local: LocalSettings | null;
