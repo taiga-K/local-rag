@@ -1,15 +1,18 @@
 import { useEffect, useRef } from "react";
 import { Glyph } from "./glyphs";
 
-export type ToastItem = { id: number; message: string };
+export type ToastItem = { id: number; message: string; sticky?: boolean };
 
-export function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
+export function ErrorToast({ message, sticky = false, onClose }: { message: string; sticky?: boolean; onClose: () => void }) {
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
+    if (sticky) {
+      return;
+    }
     const timer = window.setTimeout(() => close.current(), 7000);
     return () => window.clearTimeout(timer);
-  }, [message]);
+  }, [message, sticky]);
 
   return (
     <div className="error-toast" role="alert">
@@ -24,7 +27,7 @@ export function ToastStack({ toasts, onClose }: { toasts: ToastItem[]; onClose: 
   return (
     <div className="toast-stack" aria-live="polite">
       {toasts.map((toast) => (
-        <ErrorToast key={toast.id} message={toast.message} onClose={() => onClose(toast.id)} />
+        <ErrorToast key={toast.id} message={toast.message} sticky={toast.sticky} onClose={() => onClose(toast.id)} />
       ))}
     </div>
   );

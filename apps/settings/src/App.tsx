@@ -17,13 +17,17 @@ export function App() {
   const [adding, setAdding] = useState(false);
   const [path, setPath] = useState("");
   const [error, setError] = useState("");
+  const [errorIsLoad, setErrorIsLoad] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextToast = useRef(1);
   const previousFailed = useRef<number | null>(null);
 
-  const notifyError = useCallback((message: string) => {
+  const notifyError = useCallback((message: string, sticky = false) => {
     const id = nextToast.current++;
-    setToasts((items) => [...items.slice(-2), { id, message }]);
+    setToasts((items) => {
+      const kept = sticky ? items.filter((item) => !item.sticky) : items;
+      return [...kept.slice(-2), { id, message, sticky }];
+    });
   }, []);
 
   const closeToast = useCallback((id: number) => {
@@ -40,6 +44,8 @@ export function App() {
     setLocal(nextLocal);
     setActivity(nextActivity);
     setError("");
+    setErrorIsLoad(false);
+    setToasts((items) => (items.some((item) => item.sticky) ? items.filter((item) => !item.sticky) : items));
   }, [showAll]);
 
   useEffect(() => {
@@ -47,6 +53,7 @@ export function App() {
     const run = () => {
       void refresh().catch((cause: unknown) => {
         if (!stop) {
+          setErrorIsLoad(true);
           setError(cause instanceof Error ? cause.message : "設定を読めません");
         }
       });
@@ -79,9 +86,9 @@ export function App() {
 
   useEffect(() => {
     if (error) {
-      notifyError(error);
+      notifyError(error, errorIsLoad);
     }
-  }, [error, notifyError]);
+  }, [error, errorIsLoad, notifyError]);
 
   const importing = summary != null && !summary.pause.active && (summary.active > 0 || summary.queued > 0);
   return (
@@ -122,7 +129,10 @@ export function App() {
                   setLocal(saved);
                   setPath("");
                   setAdding(false);
-                }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "保存に失敗しました"));
+                }).catch((cause: unknown) => {
+                  setErrorIsLoad(false);
+                  setError(cause instanceof Error ? cause.message : "保存に失敗しました");
+                });
               }}
             >
               <input aria-label="追加するフォルダ" value={path} onChange={(event) => setPath(event.target.value)} />
