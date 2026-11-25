@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { loadActivity, loadSettings, loadSummary, saveSettings, type Activity, type LocalSettings, type Summary } from "./api";
-import { folderBridge } from "./bridge";
+import { folderBridge, folderPathKey } from "./bridge";
 import { FolderScreen } from "./FolderScreen";
 import { Glyph } from "./glyphs";
 import { Overview } from "./Overview";
@@ -78,7 +78,8 @@ export function App() {
         return;
       }
       const current = await loadSettings();
-      if (current.folders.includes(selected)) {
+      const selectedKey = folderPathKey(selected);
+      if (current.folders.some((folder) => folderPathKey(folder) === selectedKey)) {
         setError("そのフォルダはすでに追加されています");
         return;
       }

@@ -14,6 +14,18 @@ export function folderBridge(): LocalRagBridge | null {
   return candidate;
 }
 
+export function folderPathKey(folder: string): string {
+  let end = folder.length;
+  while (end > 1 && (folder[end - 1] === "/" || folder[end - 1] === "\\")) {
+    const withoutSeparator = folder.slice(0, end - 1);
+    if (/^[A-Za-z]:$/.test(withoutSeparator)) {
+      break;
+    }
+    end -= 1;
+  }
+  return folder.slice(0, end);
+}
+
 export function configuredFolder(folders: string[], name: string): string | null {
   const match = folders.find((folder) => folder.replace(/\\/g, "/").split("/").filter(Boolean).pop() === name);
   if (match) {
