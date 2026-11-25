@@ -380,6 +380,7 @@ def test_worker_does_not_claim_a_not_started_record():
     engine = Engine(load_settings(), DB(), None, FakeEmbedder())
     assert engine.index_record("kb", "doc-1", event_version=1, event_rev="rev") == "stale"
     assert "NOT_STARTED" not in seen[0]
+    assert "'FAILED'" not in seen[0]
 
 
 def test_finish_does_not_refill_a_collection_after_cleanup(monkeypatch):
