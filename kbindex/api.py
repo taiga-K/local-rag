@@ -796,8 +796,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload = LocalSettingsIn.model_validate(await request.json())
         except (ValidationError, json.JSONDecodeError):
             raise PushRefusal(400, "ENVELOPE_INVALID", "The local settings body is invalid.") from None
-        folders = [item.strip() for item in payload.folders]
-        if any(not item or len(item) > 1024 for item in folders) or len(folders) > 50:
+        folders = payload.folders
+        if any(not item.strip() or len(item) > 1024 for item in folders) or len(folders) > 50:
             raise PushRefusal(400, "ENVELOPE_INVALID", "folders must be 1 to 50 paths of at most 1024 characters.")
         with app.state.db.connect() as conn:
             row = save_local_settings(

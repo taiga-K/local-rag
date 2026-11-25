@@ -72,7 +72,7 @@ export function App() {
       if (picked.canceled) {
         return;
       }
-      const selected = picked.path?.trim() ?? "";
+      const selected = picked.path ?? "";
       if (!picked.ok || !selected) {
         setError(picked.error || "フォルダを選択できませんでした");
         return;

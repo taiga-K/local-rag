@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -321,7 +322,11 @@ class _SettingsConn:
 
     def execute(self, sql, params=None):
         text = " ".join(sql.split())
-        if text.startswith("update app_settings"):
+        if text.startswith("update app_settings") and "set folders" in text:
+            self.row["folders"] = json.loads(params[0])
+            self.row["include_subfolders"] = params[1]
+            self.row["auto_index"] = params[2]
+        elif text.startswith("update app_settings"):
             self.row["score_threshold_level"] = params[0]
             self.row["score_threshold_enabled"] = params[1]
             self.row["score_threshold"] = params[2]
@@ -392,6 +397,24 @@ def test_retrieve_settings_round_trip_and_local_body_stays_put():
         assert named.json() == {"level": "standard", "customValue": 0.90}
         assert row["score_threshold"] == 0.84
         assert row["score_threshold_custom"] == 0.90
+
+
+def test_local_settings_keep_exact_folder_path_spacing():
+    row = {
+        "id": 1,
+        "folders": [],
+        "include_subfolders": True,
+        "auto_index": True,
+        "max_upload_bytes": 16,
+    }
+    with _settings_client(row) as client:
+        saved = client.put(
+            "/api/v1/settings/local",
+            json={"folders": ["/data/report "], "includeSubfolders": True, "autoIndex": True},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["folders"] == ["/data/report "]
+        assert row["folders"] == ["/data/report "]
 
 
 @pytest.mark.parametrize(
