@@ -70,7 +70,13 @@ def parse_markdown(text: str, *, fmt: str = "markdown") -> dict:
             columns, rows = _table(tokens, index)
             start = len(blocks)
             for row_index, cells in enumerate(rows, start=1):
-                blocks.append(row_block(len(blocks), cells, row_sentence(columns, cells), row_number=row_index))
+                blocks.append(row_block(
+                    len(blocks),
+                    cells,
+                    row_sentence(columns, cells),
+                    row_number=row_index,
+                    citation={"row_number": row_index},
+                ))
             if rows:
                 groups.append(table_group(len(groups), start, len(blocks) - 1, columns))
             while index < len(tokens) and tokens[index].type != "table_close":

@@ -6,7 +6,7 @@ import io
 
 from oxmsg import Message
 
-from kbindex.blocks import document, text_block
+from kbindex.blocks import text_block
 from kbindex.parse_html import parse_html
 from kbindex.skip_reasons import ParseSkip
 
@@ -20,30 +20,43 @@ def parse_msg(content: bytes) -> dict:
         message = Message.load(io.BytesIO(content))
     except Exception as exc:
         raise ParseSkip("unreadable") from exc
-    html = _body_html(message)
-    parsed = parse_html(html) if html else document([], [])
-    blocks = list(parsed["blocks"])
-    header = _header(message)
+    html = _body_html(message).strip()
+    blocks: list[dict] = []
+    groups: list[dict] = []
+    if html:
+        parsed = parse_html(html)
+        blocks = [block for block in parsed["blocks"] if _visible(block)]
+        groups = parsed.get("block_groups") or []
+    header = _header(message).strip()
     if header:
         blocks.insert(0, text_block(0, header, "html", "paragraph"))
         for block in blocks[1:]:
-            block["index"] = block["index"] + 1
-            if block.get("parent_index") is not None:
-                pass
-        groups = parsed.get("block_groups") or []
+            block["index"] += 1
         for group in groups:
             for item in group.get("children", {}).get("block_ranges", []):
                 item["start"] += 1
                 item["end"] += 1
-    else:
-        groups = parsed.get("block_groups") or []
-    names = _attachment_names(message)
+    names = [name.strip("\x00") for name in _attachment_names(message) if name and name.strip("\x00")]
     if names:
         blocks.append(text_block(len(blocks), "添付: " + "、".join(names), "html", "paragraph"))
+    blocks = [block for block in blocks if _visible(block)]
     if not blocks:
         raise ParseSkip("unreadable")
-    body = document(blocks, groups)
+    for index, block in enumerate(blocks):
+        block["index"] = index
+    body: dict = {"blocks": blocks}
+    if groups:
+        body["block_groups"] = groups
     return body
+
+
+def _visible(block: dict) -> bool:
+    data = block.get("data")
+    if isinstance(data, str):
+        return bool(data.strip("\x00 \t\r\n"))
+    if isinstance(data, dict):
+        return bool(data.get("row_natural_language_text") or data.get("cells"))
+    return data is not None
 
 
 def _body_html(message) -> str:

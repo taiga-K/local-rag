@@ -11,7 +11,10 @@ from pydantic import TypeAdapter
 
 from kbindex.blocks import document
 from kbindex.contract import Block, Group, check_structure
+from kbindex.cli import unreadable_paths_to_drop
 from kbindex.formats import read_file
+from kbindex.parse_msg import parse_msg
+from tests.unit.outlook_msg import sample_msg
 from kbindex.parse_csv import parse_csv
 from kbindex.parse_html import parse_html
 from kbindex.parse_json import parse_json
@@ -57,6 +60,7 @@ def test_markdown_table_list_and_code():
     assert "code" in kinds
     row = next(block for block in body["blocks"] if block["type"] == "table_row")
     assert "列: 品番" in row["data"]["row_natural_language_text"]
+    assert row["citation_metadata"]["row_number"] == 1
 
 
 def test_html_skips_script_and_reads_table():
@@ -66,6 +70,8 @@ def test_html_skips_script_and_reads_table():
     assert "本文" in texts
     assert all("fetch" not in item for item in texts)
     assert any(block["sub_type"] == "heading" for block in body["blocks"] if block["type"] == "text" and block.get("sub_type"))
+    html_row = next(block for block in body["blocks"] if block["type"] == "table_row")
+    assert html_row["citation_metadata"]["row_number"] == 1
 
 
 def test_json_path_and_object_array():
@@ -153,6 +159,39 @@ def _epub(chapters: list[str]) -> bytes:
 <spine>{''.join(spine)}</spine>
 </package>""")
     return buffer.getvalue()
+
+
+def test_log_cut_stays_on_a_character_boundary():
+    half = LOG_MAX_BYTES // 2
+    content = "あ".encode() + b"A" * (half - 1) + "い".encode() + b"B" * LOG_MAX_BYTES
+    text = parse_capped(content)["blocks"][0]["data"]
+    assert "\ufffd" not in text
+    assert text.startswith("あ")
+    shifted = "亜".encode("cp932") + b"A" * (half - 1) + "井".encode("cp932") + b"B" * LOG_MAX_BYTES
+    decoded = parse_capped(shifted)["blocks"][0]["data"]
+    assert "\ufffd" not in decoded
+    assert decoded.startswith("亜")
+
+
+def test_message_without_text_is_skipped():
+    with pytest.raises(ParseSkip) as raised:
+        parse_msg(sample_msg(subject="", body="", filename=""))
+    assert raised.value.reason == "unreadable"
+
+
+def test_message_keeps_subject_body_and_attachment_name_only():
+    body = parse_msg(sample_msg())
+    texts = [block["data"] if isinstance(block["data"], str) else "" for block in body["blocks"]]
+    joined = "\n".join(texts)
+    assert "会議室の予約" in joined
+    assert "本文は第四会議室の鍵箱に入っています" in joined
+    assert "見積書.txt" in joined
+    assert "SECRET-9F3C" not in joined
+    assert all(text.strip() for text in texts)
+
+
+def test_deleted_unreadable_path_is_dropped():
+    assert unreadable_paths_to_drop(["gone.zip", "still.bin"], {"still.bin"}) == ["gone.zip"]
 
 
 def test_empty_document_helper():

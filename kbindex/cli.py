@@ -36,10 +36,12 @@ def sync_tree(api: str, kb: str, root: Path) -> None:
     ledger_path = root / ".kbindex-sync.json"
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
     seen: set[str] = set()
+    present: set[str] = set()
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.name == LEDGER_NAME:
             continue
         rel = path.relative_to(root).as_posix()
+        present.add(rel)
         external = _external_id(rel)
         try:
             body = read_file(path)
@@ -62,10 +64,19 @@ def sync_tree(api: str, kb: str, root: Path) -> None:
         ledger[external] = {"version": version, "path": rel, "blocks": digest}
     for external in list(ledger):
         if external not in seen:
+            recorded = ledger[external].get("path") if isinstance(ledger[external], dict) else None
+            if recorded:
+                _clear_skip(api, kb, recorded)
             _delete(api, kb, external)
             print(f"deleted {external}")
             del ledger[external]
+    _drop_absent_skips(api, kb, present)
     ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2))
+
+
+def unreadable_paths_to_drop(recorded: list[str], present: set[str]) -> list[str]:
+    """Paths recorded as unreadable that this scan did not see."""
+    return [path for path in recorded if path not in present]
 
 
 def load_jsonl(api: str, kb: str, path: Path) -> None:
@@ -90,6 +101,14 @@ def _file_version(path: Path, previous: int) -> int:
     if previous and version < previous:
         version = min(previous + 1, _MAX_VERSION)
     return version
+
+
+def _drop_absent_skips(api: str, kb: str, present: set[str]) -> None:
+    _status, body = _request("GET", f"{api}/api/v1/kb/{kb}/unreadable", None)
+    recorded = [item["relativePath"] for item in body.get("files") or []]
+    for rel in unreadable_paths_to_drop(recorded, present):
+        _clear_skip(api, kb, rel)
+        print(f"cleared {rel}")
 
 
 def _record_skip(api: str, kb: str, name: str, rel: str, reason: str) -> None:

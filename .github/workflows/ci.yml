@@ -16,6 +16,58 @@ jobs:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
       - run: pytest
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kbindex
+          POSTGRES_PASSWORD: kbindex
+          POSTGRES_DB: kbindex
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U kbindex"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 63799:6379
+      qdrant:
+        image: qdrant/qdrant:v1.15.0
+        ports:
+          - 46333:6333
+    env:
+      DATABASE_URL: postgresql://kbindex:kbindex@127.0.0.1:54329/kbindex
+      REDIS_URL: redis://127.0.0.1:63799/0
+      QDRANT_URL: http://127.0.0.1:46333
+      DATA_DIR: /tmp/kbindex-records
+      KBINDEX_CONFIG: config.test.yaml
+      KBINDEX_API: http://127.0.0.1:43123
+      INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: Start the API and the worker
+        run: |
+          mkdir -p /tmp/kbindex-records
+          python -c "from kbindex.api import main; main()" > /tmp/kbindex-api.log 2>&1 &
+          python -c "from kbindex.worker import main; main()" > /tmp/kbindex-worker.log 2>&1 &
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+            curl -fsS http://127.0.0.1:43123/api/v1/kb && exit 0
+            sleep 1
+          done
+          echo "API did not start" >&2
+          cat /tmp/kbindex-api.log >&2 || true
+          cat /tmp/kbindex-worker.log >&2 || true
+          exit 1
+      - run: pytest tests/integration/test_format_retrieve.py -q
   settings:
     strategy:
       fail-fast: false
