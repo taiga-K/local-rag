@@ -120,7 +120,7 @@ def test_unknown_extension_is_unsupported(tmp_path: Path):
         read_file(path)
     assert raised.value.reason == "unsupported"
     assert skip_message("feature_required") == "追加機能が必要です"
-    assert skip_message("models_missing") == "モデルが未取得です"
+    assert skip_message("models_missing") == "追加機能のモデルが未取得です"
     assert skip_message("scanned_pdf") == "スキャンPDFのため読めません"
 
 

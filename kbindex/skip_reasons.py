@@ -1,8 +1,6 @@
 """Closed reasons for a file the ingest tool did not push.
 
 The confirmation screen prints `message` and does not invent a cause.
-`models_missing` names the condition from the requirements. The exact sentence
-was not specified there.
 """
 
 from __future__ import annotations
@@ -11,7 +9,7 @@ SKIP_MESSAGES = {
     "unsupported": "読めない形式",
     "unreadable": "ファイルを読めませんでした",
     "feature_required": "追加機能が必要です",
-    "models_missing": "モデルが未取得です",
+    "models_missing": "追加機能のモデルが未取得です",
     "scanned_pdf": "スキャンPDFのため読めません",
     "password": "パスワードがかかっているため読めません",
 }
