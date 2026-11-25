@@ -61,7 +61,7 @@ PipesHub `ProgressStatus`（`backend/python/app/config/constants/arangodb.py`）
 
 `FAILED` は `failure_reason` を持つ。`COMPLETED` と `EMPTY` は理由を空にする。
 
-起動時に `IN_PROGRESS` が残っていたら `QUEUED` に戻し、同じイベントを再投入する。前回の処理がどこで落ちても、次の実行は現在の行を見て同じ終状態に寄る。
+起動時に `IN_PROGRESS` が残っていたら `QUEUED` に戻し、進んだ `crash_retries` を持つイベントを再投入する。古い未 ACK イベントは `crash_retries` が合わずに破棄され、前回の処理がどこで落ちても、次の実行は現在の行を見て同じ終状態に寄る。
 
 ### push の判定
 
@@ -394,9 +394,9 @@ PipesHub は push の正規化バイトをドキュメントストレージに�
 
 メッセージは PipesHub の生産者と同じ封筒である（`redis_streams/producer.py`）。Redis のフィールドは `eventType`、`payload`、`timestamp` である。`payload` は JSON 文字列である。
 
-`eventType` は `newRecord`、`updateRecord`、`deleteRecord`、`reindexRecord` である。`reindexRecord` は PipesHub の再索引イベント名である（`config/constants/arangodb.py`）。`payload` は `recordId`、`kbId`、`externalRecordId`、`version`、`contentRev` を持つ。
+`eventType` は `newRecord`、`updateRecord`、`deleteRecord`、`reindexRecord` である。`reindexRecord` は PipesHub の再索引イベント名である（`config/constants/arangodb.py`）。`payload` は `recordId`、`kbId`、`externalRecordId`、`version`、`contentRev` を持つ。クラッシュ復旧の再投入では `crashRetries` を足し、通常イベントでは省略して 0 と見なす。
 
-ワーカーはグループで読み、処理のあと XACK する。再配送は同じ終状態に寄る。`version` が行より古ければ ACK して捨てる。`deleteRecord` のあと行が無ければ、その `recordId` の点とポスティングを消して ACK する。`IN_PROGRESS` のままワーカーが落ちたレコードは起動時に1度だけ `QUEUED` へ戻す。2回目は `FAILED` にし、無限再試行で取り込み中の表示が残るのを防ぐ。compose のワーカーは `restart: unless-stopped` である。
+ワーカーはグループで読み、処理のあと XACK する。再配送は同じ終状態に寄る。`version` が行より古ければ ACK して捨てる。`deleteRecord` のあと行が無ければ、その `recordId` の点とポスティングを消して ACK する。`IN_PROGRESS` のままワーカーが落ちたレコードは起動時に1度だけ `QUEUED` へ戻す。再投入イベントは進んだ `crash_retries` を持ち、完了してもその値は残るため、古い再配送が完了済みの行をもう一度処理しない。2回目は `FAILED` にし、無限再試行で取り込み中の表示が残るのを防ぐ。compose のワーカーは `restart: unless-stopped` である。
 
 Redis のイメージは 7.2 系に固定する。7.2 は BSD-3-Clause である。7.4 以降の RSALv2 と SSPL は使わない。
 

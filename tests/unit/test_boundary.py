@@ -5,12 +5,14 @@ PipesHub: backend/python/app/connectors/sources/localKB/push/admission.py
 and backend/python/tests/unit/api/routes/test_retrieve.py.
 """
 
+import json
+
 import pytest
 
 from kbindex.api import admit, parse_retrieve
 from kbindex.config import Settings, load_settings
 from kbindex.contract import MAX_BODY_BYTES, PushRefusal
-from kbindex.stream import publish_stream, stream_names
+from kbindex.stream import publish, publish_stream, read_event, stream_names
 
 
 def _settings(**over) -> Settings:
@@ -103,6 +105,41 @@ def test_lane_names_follow_pipeshub():
     placed = publish_stream("same-record", 8)
     assert placed == publish_stream("same-record", 8)
     assert placed in names[1:]
+
+
+def test_crash_retry_generation_round_trips_and_defaults_to_zero():
+    written = []
+
+    class Redis:
+        def xadd(self, _stream, fields):
+            written.append(fields)
+            return "1-0"
+
+    client = Redis()
+    publish(
+        client,
+        "reindexRecord",
+        record_id="rec",
+        kb_id="kb",
+        external_record_id="doc",
+        version=1,
+        content_rev="rev",
+        crash_retries=1,
+    )
+    publish(
+        client,
+        "newRecord",
+        record_id="rec",
+        kb_id="kb",
+        external_record_id="doc",
+        version=1,
+        content_rev="rev",
+    )
+
+    assert read_event(written[0])["crashRetries"] == 1
+    assert json.loads(written[0]["payload"])["crashRetries"] == 1
+    assert read_event(written[1])["crashRetries"] == 0
+    assert "crashRetries" not in json.loads(written[1]["payload"])
 
 
 def test_retrieve_limit_defaults_to_eight_and_rejects_51():

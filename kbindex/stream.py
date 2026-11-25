@@ -54,17 +54,18 @@ def publish(
     version: int,
     content_rev: str,
     lanes: int = 1,
+    crash_retries: int | None = None,
 ) -> tuple[str, str]:
-    payload = json.dumps(
-        {
-            "recordId": record_id,
-            "kbId": kb_id,
-            "externalRecordId": external_record_id,
-            "version": version,
-            "contentRev": content_rev,
-        },
-        ensure_ascii=False,
-    )
+    body = {
+        "recordId": record_id,
+        "kbId": kb_id,
+        "externalRecordId": external_record_id,
+        "version": version,
+        "contentRev": content_rev,
+    }
+    if crash_retries is not None:
+        body["crashRetries"] = crash_retries
+    payload = json.dumps(body, ensure_ascii=False)
     stream = publish_stream(record_id, lanes)
     message_id = client.xadd(
         stream,
@@ -89,6 +90,11 @@ def read_event(fields: dict) -> dict:
         version = int(version)
     except (TypeError, ValueError):
         version = 0
+    crash_retries = payload.get("crashRetries") or 0
+    try:
+        crash_retries = int(crash_retries)
+    except (TypeError, ValueError):
+        crash_retries = 0
     return {
         "eventType": fields.get("eventType") or "",
         "recordId": str(payload.get("recordId") or ""),
@@ -96,4 +102,5 @@ def read_event(fields: dict) -> dict:
         "externalRecordId": str(payload.get("externalRecordId") or ""),
         "version": version,
         "contentRev": str(payload.get("contentRev") or ""),
+        "crashRetries": crash_retries,
     }

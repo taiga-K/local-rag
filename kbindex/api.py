@@ -1519,6 +1519,7 @@ def _republish_recovered(app) -> None:
             version=int(row["version"]),
             content_rev=row["content_rev"] or "",
             lanes=app.state.settings.redis_lanes,
+            crash_retries=int(row["crash_retries"]),
         )
 
 

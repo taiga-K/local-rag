@@ -239,18 +239,18 @@ class Engine:
             conn.commit()
         return rows
 
-    def index_record(self, kb_id: str, external_record_id: str, *, event_version: int, event_rev: str) -> str:
+    def index_record(self, kb_id: str, external_record_id: str, *, event_version: int, event_rev: str, event_crash_retries: int = 0) -> str:
         rid = record_id_for(kb_id, external_record_id)
         with self.db.connect() as conn:
             updated = conn.execute(
                 """
                 update records
                 set indexing_status = 'IN_PROGRESS', failure_reason = null, updated_at = now()
-                where record_id = %s and version = %s and content_rev = %s
+                where record_id = %s and version = %s and content_rev = %s and crash_retries = %s
                   and indexing_status in ('QUEUED', 'IN_PROGRESS', 'COMPLETED', 'EMPTY', 'AUTO_INDEX_OFF')
                 returning stored_path, record_name, source_modified_ms, version, content_rev
                 """,
-                (rid, event_version, event_rev),
+                (rid, event_version, event_rev, event_crash_retries),
             ).fetchone()
             conn.commit()
         if updated is None:
@@ -292,7 +292,7 @@ class Engine:
             delete_chunks_for(conn, rid)
             conn.execute(
                 """
-                update records set indexing_status = 'EMPTY', has_indexed_copy = false, failure_reason = null, crash_retries = 0, updated_at = now()
+                update records set indexing_status = 'EMPTY', has_indexed_copy = false, failure_reason = null, updated_at = now()
                 where record_id = %s and version = %s
                 """,
                 (rid, event_version),
@@ -358,7 +358,7 @@ class Engine:
             except QdrantUnavailable:
                 conn.execute(
                     """
-                    update records set indexing_status = 'FAILED', failure_reason = 'QDRANT_UNAVAILABLE', crash_retries = 0, updated_at = now()
+                    update records set indexing_status = 'FAILED', failure_reason = 'QDRANT_UNAVAILABLE', updated_at = now()
                     where record_id = %s and version = %s
                     """,
                     (rid, event_version),
@@ -374,7 +374,7 @@ class Engine:
             conn.execute(
                 """
                 update records set indexing_status = 'COMPLETED', has_indexed_copy = true,
-                  failure_reason = null, crash_retries = 0, updated_at = now()
+                  failure_reason = null, updated_at = now()
                 where record_id = %s and version = %s and indexing_status = 'IN_PROGRESS'
                 """,
                 (rid, event_version),
@@ -386,7 +386,7 @@ class Engine:
         with self.db.connect() as conn:
             conn.execute(
                 """
-                update records set indexing_status = 'FAILED', failure_reason = %s, crash_retries = 0, updated_at = now()
+                update records set indexing_status = 'FAILED', failure_reason = %s, updated_at = now()
                 where record_id = %s and version = %s and content_rev = %s
                 """,
                 (reason, rid, event_version, event_rev),

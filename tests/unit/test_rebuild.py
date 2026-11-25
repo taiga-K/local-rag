@@ -353,10 +353,12 @@ def test_publish_failure_does_not_stick_the_rebuild_lock(monkeypatch):
 
 def test_worker_does_not_claim_a_not_started_record():
     seen: list[str] = []
+    params: list[tuple] = []
 
     class Conn:
-        def execute(self, sql, _params=None):
+        def execute(self, sql, values=None):
             seen.append(" ".join(sql.split()))
+            params.append(values)
 
             class Rows:
                 def fetchone(self):
@@ -378,9 +380,11 @@ def test_worker_does_not_claim_a_not_started_record():
             return Conn()
 
     engine = Engine(load_settings(), DB(), None, FakeEmbedder())
-    assert engine.index_record("kb", "doc-1", event_version=1, event_rev="rev") == "stale"
+    assert engine.index_record("kb", "doc-1", event_version=1, event_rev="rev", event_crash_retries=1) == "stale"
     assert "NOT_STARTED" not in seen[0]
     assert "'FAILED'" not in seen[0]
+    assert "crash_retries = %s" in seen[0]
+    assert params[0][3] == 1
 
 
 def test_finish_does_not_refill_a_collection_after_cleanup(monkeypatch):

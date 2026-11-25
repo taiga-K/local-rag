@@ -69,6 +69,7 @@ def _recover(db: Database, client, lanes: int) -> None:
             version=int(row["version"]),
             content_rev=row["content_rev"] or "",
             lanes=lanes,
+            crash_retries=int(row["crash_retries"]),
         )
 
 
@@ -108,6 +109,7 @@ def _handle(engine: Engine, db: Database, client, stream_name: str, message_id: 
             event["externalRecordId"],
             event_version=event["version"],
             event_rev=event["contentRev"] or row["content_rev"],
+            event_crash_retries=event["crashRetries"],
         )
     except psycopg.OperationalError:
         time.sleep(1)

@@ -737,7 +737,7 @@ def recover_in_progress(conn) -> list[dict[str, Any]]:
             set indexing_status = 'QUEUED', failure_reason = null,
               crash_retries = crash_retries + 1, updated_at = now()
             where indexing_status = 'IN_PROGRESS' and crash_retries < 1
-            returning record_id, kb_id, external_record_id, version, content_rev
+            returning record_id, kb_id, external_record_id, version, content_rev, crash_retries
             """
         ).fetchall()
     )
