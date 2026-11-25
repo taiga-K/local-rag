@@ -11,6 +11,7 @@ import {
   type Summary,
 } from "./api";
 import { longStamp, stamp } from "./format";
+import { ErrorToast } from "./ErrorToast";
 import { Glyph } from "./glyphs";
 import { failureLine, remainingOf } from "./view";
 
@@ -157,7 +158,7 @@ export function Overview({
           ))}
         </div>
       </section>
-      {note ? <p className="error-line">{note}</p> : null}
+      {note ? <div className="toast-stack"><ErrorToast message={note} onClose={() => setNote("")} /></div> : null}
     </div>
   );
 }

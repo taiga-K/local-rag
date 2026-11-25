@@ -6,13 +6,14 @@ import json
 import math
 import os
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from qdrant_client.http import models as qm
 
-from kbindex.chunking import chunk_blocks
+from kbindex.chunking import Piece, chunk_blocks, pieces_from_spans
 from kbindex.config import Settings
 from kbindex.contract import Envelope, block_text, blocks_digest, content_rev, properties_of, request_digest, stored_bytes
 from kbindex.db import (
@@ -96,7 +97,48 @@ def texts_of_stored(payload: dict) -> list[tuple[int, str, str]]:
 
 def build_pieces(record_id: str, payload: dict, embedder: Embedder) -> list:
     pairs = [(index, text) for index, _kind, text in texts_of_stored(payload)]
-    return chunk_blocks(pairs, window=embedder.split_limit(), spans=embedder.token_spans)
+    rough = chunk_blocks(pairs, window=embedder.split_limit(), span_batches=embedder.token_span_batches)
+    return refine_pieces_exactly(rough, embedder)
+
+
+def refine_pieces_exactly(rough: list[Piece], embedder: Embedder) -> list[Piece]:
+    """Retokenize only bounded rough pieces and correct boundary drift at section seams."""
+    window = embedder.split_limit()
+    out: list[Piece] = []
+    next_piece: dict[int, int] = {}
+    for piece in rough:
+        spans = embedder.exact_token_spans(piece.text)
+        for part, count in pieces_from_spans(piece.text, spans, window):
+            piece_no = next_piece.get(piece.block_index, 0)
+            out.append(Piece(piece.block_index, piece_no, part, count))
+            next_piece[piece.block_index] = piece_no + 1
+    return out
+
+
+def embed_batch_capacity(token_count: int) -> int:
+    """Cap a batch by padded attention work, not just item count.
+
+    Thirty-two nearly-full 8192-token inputs can exhaust worker memory even though
+    one input is valid. The quadratic budget keeps long pieces small-batched while
+    preserving throughput for ordinary short blocks.
+    """
+    return max(1, min(32, 8_000_000 // max(1, token_count) ** 2))
+
+
+def embedding_batches(pieces: list) -> Iterable[list]:
+    batch: list = []
+    batch_max = 1
+    for piece in pieces:
+        piece_tokens = int(piece.token_count or 1)
+        prospective_max = max(batch_max, piece_tokens)
+        if batch and len(batch) >= embed_batch_capacity(prospective_max):
+            yield batch
+            batch = []
+            batch_max = 1
+        batch.append(piece)
+        batch_max = max(batch_max, piece_tokens)
+    if batch:
+        yield batch
 
 
 class Engine:
@@ -205,7 +247,7 @@ class Engine:
                 update records
                 set indexing_status = 'IN_PROGRESS', failure_reason = null, updated_at = now()
                 where record_id = %s and version = %s and content_rev = %s
-                  and indexing_status in ('QUEUED', 'IN_PROGRESS', 'FAILED', 'COMPLETED', 'EMPTY', 'AUTO_INDEX_OFF')
+                  and indexing_status in ('QUEUED', 'IN_PROGRESS', 'COMPLETED', 'EMPTY', 'AUTO_INDEX_OFF')
                 returning stored_path, record_name, source_modified_ms, version, content_rev
                 """,
                 (rid, event_version, event_rev),
@@ -219,7 +261,12 @@ class Engine:
             self._set_embed_progress(rid, event_version, 0, len(pieces))
             if not pieces:
                 return self._finish_empty(rid, event_version, event_rev)
-            vectors = self.embedder.embed_documents([piece.text for piece in pieces])
+            vectors = []
+            embedded = 0
+            for batch in embedding_batches(pieces):
+                vectors.extend(self.embedder.embed_documents([piece.text for piece in batch]))
+                embedded += len(batch)
+                self._set_embed_progress(rid, event_version, embedded, len(pieces))
             return self._finish_chunks(rid, kb_id, updated, pieces, vectors, event_version, event_rev, payload)
         except QdrantUnavailable:
             self._fail(rid, event_version, event_rev, "QDRANT_UNAVAILABLE")
@@ -245,7 +292,7 @@ class Engine:
             delete_chunks_for(conn, rid)
             conn.execute(
                 """
-                update records set indexing_status = 'EMPTY', has_indexed_copy = false, failure_reason = null, updated_at = now()
+                update records set indexing_status = 'EMPTY', has_indexed_copy = false, failure_reason = null, crash_retries = 0, updated_at = now()
                 where record_id = %s and version = %s
                 """,
                 (rid, event_version),
@@ -311,7 +358,7 @@ class Engine:
             except QdrantUnavailable:
                 conn.execute(
                     """
-                    update records set indexing_status = 'FAILED', failure_reason = 'QDRANT_UNAVAILABLE', updated_at = now()
+                    update records set indexing_status = 'FAILED', failure_reason = 'QDRANT_UNAVAILABLE', crash_retries = 0, updated_at = now()
                     where record_id = %s and version = %s
                     """,
                     (rid, event_version),
@@ -327,7 +374,7 @@ class Engine:
             conn.execute(
                 """
                 update records set indexing_status = 'COMPLETED', has_indexed_copy = true,
-                  failure_reason = null, updated_at = now()
+                  failure_reason = null, crash_retries = 0, updated_at = now()
                 where record_id = %s and version = %s and indexing_status = 'IN_PROGRESS'
                 """,
                 (rid, event_version),
@@ -339,7 +386,7 @@ class Engine:
         with self.db.connect() as conn:
             conn.execute(
                 """
-                update records set indexing_status = 'FAILED', failure_reason = %s, updated_at = now()
+                update records set indexing_status = 'FAILED', failure_reason = %s, crash_retries = 0, updated_at = now()
                 where record_id = %s and version = %s and content_rev = %s
                 """,
                 (reason, rid, event_version, event_rev),
@@ -350,7 +397,7 @@ class Engine:
         with self.db.connect() as conn:
             conn.execute(
                 """
-                update records set embed_done = %s, embed_total = %s
+                update records set embed_done = %s, embed_total = %s, updated_at = now()
                 where record_id = %s and version = %s and indexing_status = 'IN_PROGRESS'
                 """,
                 (done, total, rid, event_version),
@@ -488,8 +535,10 @@ class Engine:
 
 
 def _stored_error(exc: BaseException) -> str:
-    """Keep the exception text the process already has. Do not classify it."""
+    """Keep the exception text the process already has, except for memory pressure we can explain safely."""
     detail = " ".join(str(exc).split())
+    if isinstance(exc, MemoryError) or "out of memory" in detail.lower():
+        return "ファイルが大きく、索引に必要なメモリを確保できませんでした。ファイルを分割してから再試行してください。"
     text = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
     return text[:200]
 

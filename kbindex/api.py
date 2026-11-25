@@ -353,7 +353,7 @@ def _queue_records(app, kb_id: str) -> JSONResponse:
     with app.state.db.connect() as conn:
         rows = conn.execute(
             """
-            update records set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+            update records set indexing_status = 'QUEUED', failure_reason = null, crash_retries = 0, updated_at = now()
             where kb_id = %s and coalesce(stored_path, '') <> ''
             returning record_id, kb_id, external_record_id, version, content_rev
             """,
@@ -647,7 +647,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise PushRefusal(409, "IN_PROGRESS", "The record is already processing.")
         with app.state.db.connect() as conn:
             conn.execute(
-                "update records set indexing_status = 'QUEUED', failure_reason = null, updated_at = now() where record_id = %s",
+                "update records set indexing_status = 'QUEUED', failure_reason = null, crash_retries = 0, updated_at = now() where record_id = %s",
                 (row["record_id"],),
             )
             conn.commit()
@@ -1087,7 +1087,7 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
                 """
                 update records set version = %s, revision_id = %s, content_rev = %s, blocks_sha = %s,
                   record_name = %s, source_modified_ms = %s, indexing_status = %s, failure_reason = null,
-                  raw_path = %s, stored_path = %s, updated_at = now()
+                  crash_retries = 0, raw_path = %s, stored_path = %s, updated_at = now()
                 where record_id = %s
                 """,
                 (

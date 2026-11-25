@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 
@@ -51,23 +52,47 @@ def split_block(text: str, *, window: int, encode: Tokenizer, decode: Decoder) -
 
 def pieces_from_spans(text: str, spans: list[tuple[int, int]], window: int) -> list[tuple[str, int]]:
     """Cut `text` on token spans. The pieces join back to `text` and do not overlap."""
+    return list(pieces_from_span_batches(text, [spans], window))
+
+
+def pieces_from_span_batches(
+    text: str,
+    batches: Iterable[list[tuple[int, int]]],
+    window: int,
+) -> Iterable[tuple[str, int]]:
+    """Cut text while keeping only one tokenizer section and one output window in memory.
+
+    A long block can produce millions of spans. Materializing that list before cutting
+    is enough to kill the indexing worker, so spans are consumed as bounded batches.
+    """
     if window < 1:
         raise ValueError("window must be positive")
-    if not spans or len(spans) <= window:
-        count = len(spans) if spans else 1
-        return [(text, count)]
-    parts: list[tuple[str, int]] = []
+    pending = deque[tuple[int, int]]()
     start = 0
-    for offset in range(0, len(spans), window):
-        group = spans[offset : offset + window]
-        end = len(text) if offset + window >= len(spans) else group[-1][1]
+
+    def emit(group: list[tuple[int, int]], end: int) -> tuple[str, int] | None:
+        nonlocal start
         if end < start:
             end = start
         piece = text[start:end]
-        if piece:
-            parts.append((piece, len(group)))
+        if not piece:
+            return None
         start = end
-    return parts
+        return piece, len(group)
+
+    for batch in batches:
+        pending.extend(batch)
+        while len(pending) > window:
+            group = [pending.popleft() for _ in range(window)]
+            emitted = emit(group, group[-1][1])
+            if emitted is not None:
+                yield emitted
+    if pending:
+        emitted = emit(list(pending), len(text))
+        if emitted is not None:
+            yield emitted
+    elif start == 0 and text:
+        yield text, 1
 
 
 def chunk_blocks(
@@ -77,6 +102,7 @@ def chunk_blocks(
     encode: Tokenizer | None = None,
     decode: Decoder | None = None,
     spans: Callable[[str], list[tuple[int, int]]] | None = None,
+    span_batches: Callable[[str], Iterable[list[tuple[int, int]]]] | None = None,
 ) -> list[Piece]:
     """`blocks` is `(block_index, text)`. Empty text yields no piece."""
     encode = encode or _char_tokens
@@ -84,6 +110,10 @@ def chunk_blocks(
     out: list[Piece] = []
     for index, text in blocks:
         if not text.strip():
+            continue
+        if span_batches is not None:
+            for piece_no, (part, count) in enumerate(pieces_from_span_batches(text, span_batches(text), window)):
+                out.append(Piece(index, piece_no, part, count))
             continue
         if spans is not None:
             for piece_no, (part, count) in enumerate(pieces_from_spans(text, spans(text), window)):

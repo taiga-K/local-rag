@@ -42,6 +42,7 @@ create table if not exists records (
   stored_path text,
   embed_done int,
   embed_total int,
+  crash_retries int not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (kb_id, external_record_id)
@@ -143,6 +144,7 @@ ALTERS = (
     "alter table bm25_stats drop column if exists total_tokens",
     "alter table records add column if not exists embed_done int",
     "alter table records add column if not exists embed_total int",
+    "alter table records add column if not exists crash_retries int not null default 0",
     """
     create table if not exists app_settings (
       id int primary key,
@@ -660,7 +662,7 @@ def queue_failed_records(conn, kb_id: str | None) -> list[dict[str, Any]]:
             conn.execute(
                 """
                 update records
-                set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+                set indexing_status = 'QUEUED', failure_reason = null, crash_retries = 0, updated_at = now()
                 where indexing_status = 'FAILED'
                 returning record_id, kb_id, external_record_id, version, content_rev
                 """
@@ -670,7 +672,7 @@ def queue_failed_records(conn, kb_id: str | None) -> list[dict[str, Any]]:
         conn.execute(
             """
             update records
-            set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+            set indexing_status = 'QUEUED', failure_reason = null, crash_retries = 0, updated_at = now()
             where indexing_status = 'FAILED' and kb_id = %s
             returning record_id, kb_id, external_record_id, version, content_rev
             """,
@@ -684,7 +686,7 @@ def queue_kb_records(conn, kb_id: str) -> list[dict[str, Any]]:
         conn.execute(
             """
             update records
-            set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+            set indexing_status = 'QUEUED', failure_reason = null, crash_retries = 0, updated_at = now()
             where kb_id = %s and indexing_status <> 'EMPTY'
             returning record_id, kb_id, external_record_id, version, content_rev
             """,
@@ -715,23 +717,37 @@ def write_generation(conn, *, fingerprint: str, model: str, dimension: int | Non
     )
 
 
+WORKER_CRASH_FAILURE = "取り込み処理が異常終了したため中断しました。再試行してください。"
+
+
 def recover_in_progress(conn) -> list[dict[str, Any]]:
-    rows = conn.execute(
+    """Requeue one interrupted attempt, then fail the poisoned record instead of looping."""
+    conn.execute(
         """
         update records
-        set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
-        where indexing_status = 'IN_PROGRESS'
-        returning record_id, kb_id, external_record_id, version, content_rev
-        """
-    ).fetchall()
-    return list(rows)
+        set indexing_status = 'FAILED', failure_reason = %s, updated_at = now()
+        where indexing_status = 'IN_PROGRESS' and crash_retries >= 1
+        """,
+        (WORKER_CRASH_FAILURE,),
+    )
+    return list(
+        conn.execute(
+            """
+            update records
+            set indexing_status = 'QUEUED', failure_reason = null,
+              crash_retries = crash_retries + 1, updated_at = now()
+            where indexing_status = 'IN_PROGRESS' and crash_retries < 1
+            returning record_id, kb_id, external_record_id, version, content_rev
+            """
+        ).fetchall()
+    )
 
 
 def queue_records_with_text(conn) -> list[dict[str, Any]]:
     conn.execute(
         """
         update records
-        set indexing_status = 'QUEUED', failure_reason = null, updated_at = now()
+        set indexing_status = 'QUEUED', failure_reason = null, crash_retries = 0, updated_at = now()
         where indexing_status <> 'EMPTY'
         """
     )

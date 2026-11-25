@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { loadActivity, loadSettings, loadSummary, saveSettings, type Activity, type LocalSettings, type Summary } from "./api";
+import { ToastStack, type ToastItem } from "./ErrorToast";
 import { FolderScreen } from "./FolderScreen";
 import { Glyph } from "./glyphs";
 import { Overview } from "./Overview";
@@ -16,6 +17,18 @@ export function App() {
   const [adding, setAdding] = useState(false);
   const [path, setPath] = useState("");
   const [error, setError] = useState("");
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const nextToast = useRef(1);
+  const previousFailed = useRef<number | null>(null);
+
+  const notifyError = useCallback((message: string) => {
+    const id = nextToast.current++;
+    setToasts((items) => [...items.slice(-2), { id, message }]);
+  }, []);
+
+  const closeToast = useCallback((id: number) => {
+    setToasts((items) => items.filter((item) => item.id !== id));
+  }, []);
 
   const refresh = useCallback(async () => {
     const [nextSummary, nextLocal, nextActivity] = await Promise.all([
@@ -52,6 +65,23 @@ export function App() {
       setScreen({ kind: "overview" });
     }
   }, [screen, summary, folder]);
+
+  useEffect(() => {
+    if (!summary) {
+      return;
+    }
+    if (previousFailed.current !== null && summary.failed > previousFailed.current) {
+      const added = summary.failed - previousFailed.current;
+      notifyError(`${added}件のファイルを取り込めませんでした`);
+    }
+    previousFailed.current = summary.failed;
+  }, [summary, notifyError]);
+
+  useEffect(() => {
+    if (error) {
+      notifyError(error);
+    }
+  }, [error, notifyError]);
 
   const importing = summary != null && !summary.pause.active && (summary.active > 0 || summary.queued > 0);
   return (
@@ -105,7 +135,6 @@ export function App() {
         </button>
       </aside>
       <main className="main">
-        {error ? <p className="error-line">{error}</p> : null}
         {summary ? (
           <Body
             screen={screen}
@@ -120,6 +149,7 @@ export function App() {
           />
         ) : null}
       </main>
+      <ToastStack toasts={toasts} onClose={closeToast} />
     </div>
   );
 }
