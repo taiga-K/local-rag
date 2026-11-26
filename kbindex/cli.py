@@ -1,16 +1,16 @@
-"""Push txt, md, and html files, and delete files that disappeared."""
+"""Push supported files, record the ones that could not be read, and delete files that disappeared."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from bs4 import BeautifulSoup
+from kbindex.formats import LEDGER_NAME, blocks_sha, read_file
+from kbindex.skip_reasons import ParseSkip
 
 
 def main() -> None:
@@ -36,24 +36,47 @@ def sync_tree(api: str, kb: str, root: Path) -> None:
     ledger_path = root / ".kbindex-sync.json"
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
     seen: set[str] = set()
+    present: set[str] = set()
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in {".txt", ".md", ".html"}:
+        if not path.is_file() or path.name == LEDGER_NAME:
             continue
         rel = path.relative_to(root).as_posix()
+        present.add(rel)
         external = _external_id(rel)
+        try:
+            body = read_file(path)
+        except ParseSkip as exc:
+            if external in ledger:
+                _delete(api, kb, external)
+                del ledger[external]
+            _record_skip(api, kb, path.name, rel, exc.reason)
+            print(f"skipped {rel} {exc.reason}")
+            continue
         seen.add(external)
+        _clear_skip(api, kb, rel)
         previous = int(ledger.get(external, {}).get("version", 0))
         version = _file_version(path, previous)
-        body = _blocks(path)
+        digest = blocks_sha(body)
+        if digest != ledger.get(external, {}).get("blocks") and version <= previous:
+            version = min(previous + 1, _MAX_VERSION)
         status = _push(api, kb, external, path.name, version, body)
         print(f"{status} {external}")
-        ledger[external] = {"version": version, "path": rel}
+        ledger[external] = {"version": version, "path": rel, "blocks": digest}
     for external in list(ledger):
         if external not in seen:
+            recorded = ledger[external].get("path") if isinstance(ledger[external], dict) else None
+            if recorded:
+                _clear_skip(api, kb, recorded)
             _delete(api, kb, external)
             print(f"deleted {external}")
             del ledger[external]
+    _drop_absent_skips(api, kb, present)
     ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2))
+
+
+def unreadable_paths_to_drop(recorded: list[str], present: set[str]) -> list[str]:
+    """Paths recorded as unreadable that this scan did not see."""
+    return [path for path in recorded if path not in present]
 
 
 def load_jsonl(api: str, kb: str, path: Path) -> None:
@@ -65,15 +88,6 @@ def load_jsonl(api: str, kb: str, path: Path) -> None:
         blocks = {"blocks": [{"index": 0, "type": "text", "format": "txt", "data": item["text"]}]}
         status = _push(api, kb, item["externalRecordId"], item.get("recordName") or item["externalRecordId"], int(item.get("version") or 1), blocks)
         print(f"{status} {item['externalRecordId']}")
-
-
-def _blocks(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".txt":
-        return {"blocks": [{"index": 0, "type": "text", "format": "txt", "data": text}]}
-    if path.suffix.lower() == ".md":
-        return _markdown(text)
-    return _html(text)
 
 
 _MAX_VERSION = 2**53 - 1
@@ -89,71 +103,21 @@ def _file_version(path: Path, previous: int) -> int:
     return version
 
 
-def _markdown(text: str) -> dict:
-    items: list[tuple[str, str]] = []
-    buffer: list[str] = []
-
-    def flush() -> None:
-        value = "\n".join(buffer).strip()
-        buffer.clear()
-        if value:
-            items.append(("p", value))
-
-    for line in text.splitlines():
-        heading = re.match(r"^#{1,6}\s+(\S.*)$", line)
-        if heading:
-            flush()
-            items.append(("h", heading.group(1).strip()))
-        elif not line.strip():
-            flush()
-        else:
-            buffer.append(line)
-    flush()
-    blocks = []
-    starts = []
-    for kind, value in items:
-        if kind == "h":
-            starts.append(len(blocks))
-        blocks.append({
-            "index": len(blocks),
-            "type": "text",
-            "format": "markdown",
-            "sub_type": "heading" if kind == "h" else "paragraph",
-            "data": value,
-        })
-    groups = []
-    for pos, start in enumerate(starts):
-        end = starts[pos + 1] - 1 if pos + 1 < len(starts) else len(blocks) - 1
-        groups.append({
-            "index": pos,
-            "type": "text_section",
-            "name": blocks[start]["data"][:1024],
-            "children": {"block_ranges": [{"start": start, "end": end}]},
-        })
-        for index in range(start, end + 1):
-            blocks[index]["parent_index"] = pos
-    if not blocks:
-        blocks = [{"index": 0, "type": "text", "format": "markdown", "data": ""}]
-    body: dict = {"blocks": blocks}
-    if groups:
-        body["block_groups"] = groups
-    return body
+def _drop_absent_skips(api: str, kb: str, present: set[str]) -> None:
+    _status, body = _request("GET", f"{api}/api/v1/kb/{kb}/unreadable", None)
+    recorded = [item["relativePath"] for item in body.get("files") or []]
+    for rel in unreadable_paths_to_drop(recorded, present):
+        _clear_skip(api, kb, rel)
+        print(f"cleared {rel}")
 
 
-def _html(text: str) -> dict:
-    soup = BeautifulSoup(text, "html.parser")
-    for tag in soup.find_all(["script", "style"]):
-        tag.decompose()
-    blocks = []
-    for node in soup.find_all(["h1", "h2", "h3", "p", "li"]):
-        value = node.get_text(" ", strip=True)
-        if not value:
-            continue
-        kind = "heading" if node.name.startswith("h") else "list_item" if node.name == "li" else "paragraph"
-        blocks.append({"index": len(blocks), "type": "text", "format": "html", "data": value, "sub_type": kind})
-    if not blocks:
-        blocks = [{"index": 0, "type": "text", "format": "html", "data": soup.get_text(" ", strip=True)}]
-    return {"blocks": blocks}
+def _record_skip(api: str, kb: str, name: str, rel: str, reason: str) -> None:
+    _request("PUT", f"{api}/api/v1/kb/{kb}/unreadable", {"fileName": name, "relativePath": rel, "reason": reason})
+
+
+def _clear_skip(api: str, kb: str, rel: str) -> None:
+    quoted = urllib.request.quote(rel, safe="")
+    _request("DELETE", f"{api}/api/v1/kb/{kb}/unreadable?relativePath={quoted}", None)
 
 
 def _external_id(rel: str) -> str:

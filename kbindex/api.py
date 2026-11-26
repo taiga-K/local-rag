@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from kbindex.config import Settings, load_settings, rebuild_enabled
 from kbindex.similarity import CUSTOM_LEVEL, THRESHOLD_LEVELS, custom_threshold
 from kbindex.ingest_ui import failure_fields, pause_deadline, pause_is_active, PAUSE_KINDS
+from kbindex.skip_reasons import SKIP_MESSAGES, skip_message
 from kbindex.contract import (
     EXTERNAL_RECORD_ID,
     MAX_BODY_BYTES,
@@ -38,6 +39,9 @@ from kbindex.db import (
     latest_record_update,
     list_external_ids,
     list_kbs,
+    list_unreadable,
+    delete_unreadable,
+    upsert_unreadable,
     list_record_status,
     queue_failed_records,
     queue_kb_records,
@@ -149,6 +153,20 @@ class UploadLimitIn(BaseModel):
 class DeviceIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     device: str
+
+
+class UnreadableIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fileName: str = Field(min_length=1, max_length=255)
+    relativePath: str = Field(min_length=1, max_length=1024)
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, value: str) -> str:
+        if value not in SKIP_MESSAGES:
+            raise ValueError("reason")
+        return value
 
 
 class PauseIn(BaseModel):
@@ -752,7 +770,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "normalized": normalized,
                 "blocks": [
                     {"index": index, "type": kind, "text": text}
-                    for index, kind, text in texts_of_stored(payload)
+                    for index, kind, text, _cite in texts_of_stored(payload)
                 ],
                 "chunks": [
                     {
@@ -783,6 +801,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with app.state.db.connect() as conn:
             rows = list_record_status(conn, kb_id, cap, off, status)
         return JSONResponse({"records": [_record_public(row) for row in rows]})
+
+    @app.get("/api/v1/kb/{kb_id}/unreadable")
+    def get_unreadable(kb_id: str) -> JSONResponse:
+        _require_kb(app, kb_id)
+        with app.state.db.connect() as conn:
+            rows = list_unreadable(conn, kb_id)
+        return JSONResponse({"files": [_unreadable_public(row) for row in rows]})
+
+    @app.put("/api/v1/kb/{kb_id}/unreadable")
+    async def put_unreadable(kb_id: str, request: Request) -> JSONResponse:
+        _require_kb(app, kb_id)
+        try:
+            payload = UnreadableIn.model_validate(await request.json())
+        except (ValidationError, json.JSONDecodeError):
+            raise PushRefusal(400, "ENVELOPE_INVALID", "The unreadable body is invalid.") from None
+        with app.state.db.connect() as conn:
+            upsert_unreadable(conn, kb_id, payload.relativePath, payload.fileName, payload.reason)
+            conn.commit()
+        return JSONResponse({"relativePath": payload.relativePath, "reason": payload.reason, "message": skip_message(payload.reason)})
+
+    @app.delete("/api/v1/kb/{kb_id}/unreadable")
+    def delete_one_unreadable(kb_id: str, relativePath: str) -> JSONResponse:
+        _require_kb(app, kb_id)
+        if not relativePath or len(relativePath) > 1024:
+            raise PushRefusal(400, "ENVELOPE_INVALID", "relativePath is invalid.")
+        with app.state.db.connect() as conn:
+            delete_unreadable(conn, kb_id, relativePath)
+            conn.commit()
+        return JSONResponse({"deleted": True})
 
     @app.get("/api/v1/settings/local")
     def get_local_settings() -> JSONResponse:
@@ -1163,7 +1210,7 @@ def _commit_push(app: FastAPI, kb_id: str, raw: bytes, envelope) -> JSONResponse
 
 def _write_graph(conn, rid, stored: bytes) -> None:
     payload = json.loads(stored)
-    graph = [(index, parent_of(payload, index), kind, text) for index, kind, text in texts_of_stored(payload)]
+    graph = [(index, parent_of(payload, index), kind, text, cite) for index, kind, text, cite in texts_of_stored(payload)]
     replace_graph(conn, rid, graph)
     replace_groups(conn, rid, groups_of(payload))
 
@@ -1368,6 +1415,16 @@ def _pipeshub_record(row) -> dict:
         record["embedDone"] = status["embedDone"]
         record["embedTotal"] = status["embedTotal"]
     return {"record": record, "knowledgeBase": {"id": row["kb_id"]}}
+
+
+def _unreadable_public(row) -> dict:
+    return {
+        "fileName": row["file_name"],
+        "relativePath": row["relative_path"],
+        "reason": row["reason"],
+        "message": skip_message(row["reason"]),
+        "recordedAt": _iso_z(row["recorded_at"]),
+    }
 
 
 def _record_public(row) -> dict:

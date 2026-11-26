@@ -177,6 +177,17 @@ ALTERS = (
     )
     """,
     "alter table records add column if not exists has_indexed_copy boolean not null default false",
+    "alter table blocks add column if not exists citation jsonb",
+    """
+    create table if not exists unreadable_files (
+      kb_id text not null,
+      relative_path text not null,
+      file_name text not null,
+      reason text not null,
+      recorded_at timestamptz not null default now(),
+      primary key (kb_id, relative_path)
+    )
+    """,
     "alter table bm25_postings alter column tf type double precision using tf::double precision",
 )
 
@@ -850,16 +861,28 @@ def _drop_wiped_deltas(conn, touched: list[dict]) -> None:
     )
 
 
-def replace_graph(conn, record_id, blocks: list[tuple[int, int | None, str, str]]) -> None:
+def _json_text(value: Any) -> str | None:
+    """JSON text for a jsonb column. A string is already encoded."""
+    if value is None or isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def replace_graph(conn, record_id, blocks: list[tuple]) -> None:
     conn.execute("delete from blocks where record_id = %s", (record_id,))
     conn.execute("delete from block_groups where record_id = %s", (record_id,))
-    for position, parent, kind, text in blocks:
+    for row in blocks:
+        position, parent, kind, text = row[0], row[1], row[2], row[3]
+        citation = row[4] if len(row) > 4 else None
         conn.execute(
             """
-            insert into blocks (block_id, record_id, position, parent_position, group_position, type, text)
-            values (%s, %s, %s, %s, %s, %s, %s)
+            insert into blocks (block_id, record_id, position, parent_position, group_position, type, text, citation)
+            values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             """,
-            (block_id_for(record_id, position), record_id, position, parent, parent, kind, text),
+            (
+                block_id_for(record_id, position), record_id, position, parent, parent, kind, text,
+                _json_text(citation),
+            ),
         )
 
 
@@ -903,7 +926,7 @@ def read_record_index(conn, record_id) -> dict:
         dict(row)
         for row in conn.execute(
             """
-            select block_id, record_id, position, parent_position, group_position, type, text
+            select block_id, record_id, position, parent_position, group_position, type, text, citation
             from blocks where record_id = %s
             """,
             (record_id,),
@@ -929,12 +952,13 @@ def write_record_index(conn, record_id, snap: dict) -> None:
     for row in snap["blocks"]:
         conn.execute(
             """
-            insert into blocks (block_id, record_id, position, parent_position, group_position, type, text)
-            values (%s, %s, %s, %s, %s, %s, %s)
+            insert into blocks (block_id, record_id, position, parent_position, group_position, type, text, citation)
+            values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             """,
             (
                 row["block_id"], record_id, row["position"], row["parent_position"],
                 row["group_position"], row["type"], row["text"],
+                _json_text(row.get("citation")),
             ),
         )
     for row in snap["groups"]:
@@ -1087,6 +1111,37 @@ def bm25_rows(conn, tokenizer: str, terms: list[str], kb_ids: list[str] | None =
     return stats, df_rows, posts
 
 
+def upsert_unreadable(conn, kb_id: str, relative_path: str, file_name: str, reason: str) -> None:
+    conn.execute(
+        """
+        insert into unreadable_files (kb_id, relative_path, file_name, reason, recorded_at)
+        values (%s, %s, %s, %s, now())
+        on conflict (kb_id, relative_path) do update
+        set file_name = excluded.file_name, reason = excluded.reason, recorded_at = now()
+        """,
+        (kb_id, relative_path, file_name, reason),
+    )
+
+
+def delete_unreadable(conn, kb_id: str, relative_path: str) -> None:
+    conn.execute(
+        "delete from unreadable_files where kb_id = %s and relative_path = %s",
+        (kb_id, relative_path),
+    )
+
+
+def list_unreadable(conn, kb_id: str):
+    return conn.execute(
+        """
+        select file_name, relative_path, reason, recorded_at
+        from unreadable_files
+        where kb_id = %s
+        order by recorded_at desc, relative_path
+        """,
+        (kb_id,),
+    ).fetchall()
+
+
 def hydrate_chunks(conn, chunk_ids: list[str]):
     if not chunk_ids:
         return []
@@ -1095,9 +1150,11 @@ def hydrate_chunks(conn, chunk_ids: list[str]):
         select c.chunk_id, c.text, c.block_index, c.piece, c.token_count,
                r.record_id, r.external_record_id, r.record_name, r.kb_id,
                r.indexing_status, r.has_indexed_copy,
-               r.source_modified_ms, r.created_at, r.updated_at
+               r.source_modified_ms, r.created_at, r.updated_at,
+               b.citation
         from chunks c
         join records r on r.record_id = c.record_id
+        left join blocks b on b.block_id = c.block_id
         where c.chunk_id = any(%s)
         """,
         (chunk_ids,),

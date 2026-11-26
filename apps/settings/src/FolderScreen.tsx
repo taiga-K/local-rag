@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import {
   detachKb,
   loadRecords,
+  loadUnreadable,
   reprocessRecord,
   retryFailed,
   type FolderCount,
   type LocalSettings,
   type RecordRow,
+  type UnreadableFile,
 } from "./api";
 import { folderBridge, configuredFolder } from "./bridge";
 import { stamp } from "./format";
@@ -25,6 +27,7 @@ export function FolderScreen({
   onReload: () => Promise<void>;
 }) {
   const [records, setRecords] = useState<RecordRow[]>([]);
+  const [unread, setUnread] = useState<UnreadableFile[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [more, setMore] = useState(false);
@@ -46,6 +49,15 @@ export function FolderScreen({
           setNote("ファイルを読めません");
         }
       });
+      void loadUnreadable(folder.id).then((rows) => {
+        if (!stop) {
+          setUnread(rows);
+        }
+      }).catch(() => {
+        if (!stop) {
+          setUnread([]);
+        }
+      });
     };
     load();
     const timer = window.setInterval(load, 5000);
@@ -59,6 +71,7 @@ export function FolderScreen({
   const matches = (row: RecordRow) => !needle || row.recordName.toLowerCase().includes(needle);
   const byTime = (leftRow: RecordRow, rightRow: RecordRow) => (rightRow.updatedAt ?? "").localeCompare(leftRow.updatedAt ?? "");
   const failed = records.filter((row) => row.indexingStatus === "FAILED" && matches(row)).sort(byTime);
+  const skipped = unread.filter((row) => !needle || row.fileName.toLowerCase().includes(needle) || row.relativePath.toLowerCase().includes(needle));
   const left = records.filter((row) => (row.indexingStatus === "QUEUED" || row.indexingStatus === "IN_PROGRESS") && matches(row)).sort((leftRow, rightRow) => {
     if (leftRow.indexingStatus === rightRow.indexingStatus) {
       return byTime(leftRow, rightRow);
@@ -132,6 +145,27 @@ export function FolderScreen({
       </div>
       <div className="list">
         <div className="lh"><span /><span>名前</span><span>更新日時</span><span>状態</span></div>
+        {filter === "all" || filter === "failed" ? (
+          skipped.length > 0 ? (
+            <>
+              <div className="grp">
+                <span className="ic bad">{Glyph.errSmall}</span>
+                <span className="gt">読めなかったファイル</span>
+                <span className="gn">{skipped.length}</span>
+              </div>
+              {skipped.map((row) => (
+                <div className="file" key={row.relativePath}>
+                  <div className="li">
+                    <span className="ic bad">{Glyph.err}</span>
+                    <span className="nm">{row.fileName}</span>
+                    <span className="dt">{stamp(null, row.recordedAt)}</span>
+                    <span className="why">{row.message}</span>
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : null
+        ) : null}
         {filter === "all" || filter === "failed" ? (
           failed.length > 0 ? (
             <>

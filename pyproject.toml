@@ -12,6 +12,12 @@ dependencies = [
   "qdrant-client>=1.12",
   "pyyaml>=6.0",
   "beautifulsoup4>=4.12",
+  "markdown-it-py>=3.0",
+  "mdit-py-plugins>=0.4",
+  "selectolax>=0.3",
+  "python-oxmsg>=0.0.2",
+  "compressed-rtf>=1.0.7",
+  "striprtf>=0.0.26",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +38,7 @@ kbindex-maintain = "kbindex.maintain:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
   "integration: needs Postgres, Redis, and Qdrant. Skipped unless INTEGRATION=1",
   "slow: loads cl-nagoya/ruri-v3-310m. Skipped unless SLOW=1",

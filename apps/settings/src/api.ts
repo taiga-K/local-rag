@@ -116,6 +116,19 @@ export function retryFailed(): Promise<{ queued: number }> {
   return send("/api/v1/ingest/retry-failed", "POST", {}) as Promise<{ queued: number }>;
 }
 
+export type UnreadableFile = {
+  fileName: string;
+  relativePath: string;
+  reason: string;
+  message: string;
+  recordedAt: string | null;
+};
+
+export async function loadUnreadable(kbId: string): Promise<UnreadableFile[]> {
+  const body = (await send(`/api/v1/kb/${encodeURIComponent(kbId)}/unreadable`, "GET")) as { files: UnreadableFile[] };
+  return body.files;
+}
+
 export async function loadRecords(kbId: string, status?: string): Promise<RecordRow[]> {
   const pageSize = 200;
   const all: RecordRow[] = [];
