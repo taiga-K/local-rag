@@ -127,6 +127,8 @@ describe("installer script", () => {
     const text = fs.readFileSync(new URL("../build/installer.nsh", import.meta.url), "utf8");
     expect(text).toContain("${ifNot} ${isUpdated}");
     expect(text).toContain("-EncodedCommand");
+    expect(text).toContain('SetOutPath $TEMP');
+    expect(text).toContain('RMDir "$INSTDIR"');
     expect(text).not.toContain("''");
   });
 });

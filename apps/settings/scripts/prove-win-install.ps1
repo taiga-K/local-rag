@@ -163,24 +163,40 @@ function Invoke-PhaseUninstall {
     throw "silent uninstall exited $($proc.ExitCode)"
   }
   # NSIS copies the uninstaller to %TEMP% and the process we started exits before that copy deletes the files.
-  $gone = $false
+  $app = Join-Path $dest "$AppDirName.exe"
   for ($i = 0; $i -lt 60; $i++) {
-    $dirLeft = Test-Path -LiteralPath $dest
+    $appLeft = Test-Path -LiteralPath $app
+    $uninstLeft = Test-Path -LiteralPath $uninst
     $linkLeft = $shortcut -and (Test-Path -LiteralPath $shortcut)
-    if (-not $dirLeft -and -not $linkLeft) {
-      $gone = $true
+    if (-not $appLeft -and -not $uninstLeft -and -not $linkLeft) {
       break
     }
     Start-Sleep -Seconds 1
   }
-  if (-not $gone) {
-    if (Test-Path -LiteralPath $dest) {
-      Get-ChildItem -LiteralPath $dest -Force | ForEach-Object { Write-Host "LEFT $($_.Name)" }
-      throw "install dir remains: $dest"
-    }
+  if (Test-Path -LiteralPath $app) {
+    throw "app remains: $app"
+  }
+  if (Test-Path -LiteralPath $uninst) {
+    throw "uninstaller remains: $uninst"
+  }
+  if ($shortcut -and (Test-Path -LiteralPath $shortcut)) {
     throw "shortcut remains: $shortcut"
   }
-  Write-Host "CLEANUP install dir and shortcut are gone"
+  if (Test-Path -LiteralPath $dest) {
+    $left = @(Get-ChildItem -LiteralPath $dest -Force)
+    foreach ($item in $left) {
+      Write-Host "LEFT $($item.Name)"
+    }
+    if ($left.Count -gt 0) {
+      throw "install dir not empty: $dest"
+    }
+    Remove-Item -LiteralPath $dest -Force
+    Write-Host "CLEANUP removed empty install dir"
+  }
+  if (Test-Path -LiteralPath $dest) {
+    throw "install dir remains: $dest"
+  }
+  Write-Host "CLEANUP app files and shortcut are gone"
 }
 
 switch ($Phase) {
