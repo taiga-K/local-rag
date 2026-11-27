@@ -12,6 +12,7 @@ import {
   type LocalSettings,
   type ThresholdLevel,
 } from "./api";
+import { cloneBridge } from "./bridge";
 import { Glyph } from "./glyphs";
 import {
   THRESHOLD_ERROR,
@@ -42,6 +43,7 @@ export function SettingsScreen() {
   const [savedCustom, setSavedCustom] = useState<number | null>(null);
   const [theme, setTheme] = useState<ThemeChoice>("system");
   const [note, setNote] = useState("");
+  const [clonePath, setClonePath] = useState("");
   const customInput = useRef<HTMLInputElement>(null);
   const customFocus = useRef(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -60,6 +62,10 @@ export function SettingsScreen() {
       setCustomText(score.level === "custom" && remembered !== null ? remembered.toFixed(2) : "");
       setEmbedding(embed);
     }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "設定を読めません"));
+    const clone = cloneBridge();
+    if (clone) {
+      void clone.clonePath().then((saved) => setClonePath(saved ?? ""));
+    }
     const stored = window.localStorage.getItem("local-rag-theme");
     if (stored === "light" || stored === "dark" || stored === "system") {
       setTheme(stored);
@@ -170,6 +176,37 @@ export function SettingsScreen() {
     <div className="col set">
       <h1>設定</h1>
       <section style={{ marginTop: 24 }}>
+        <div className="sec-head"><h2>起動</h2></div>
+        <Row
+          name="リポジトリのフォルダ"
+          desc={clonePath || "まだ選んでいません。選んだあとはアプリを起動し直します。"}
+          control={
+            <button
+              className="btn sm"
+              type="button"
+              onClick={() => {
+                const clone = cloneBridge();
+                if (!clone) {
+                  return;
+                }
+                void clone.pickClone().then((result) => {
+                  if (result.ok && result.path) {
+                    setClonePath(result.path);
+                    setNote("フォルダを保存しました。アプリを起動し直すと、そのフォルダでスタックを起動します。");
+                    return;
+                  }
+                  if (result.error) {
+                    setNote(result.error);
+                  }
+                });
+              }}
+            >
+              変更
+            </button>
+          }
+        />
+      </section>
+      <section>
         <div className="sec-head"><h2>取り込み</h2></div>
         <Row
           name="フォルダの変更を自動で取り込む"
