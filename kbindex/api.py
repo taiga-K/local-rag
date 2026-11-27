@@ -483,6 +483,30 @@ async def _put_embedding(app, request: Request) -> JSONResponse:
     return JSONResponse({"model": model, "dimension": dimension, "restartRequired": True})
 
 
+def _healthy(ok: bool) -> str:
+    return "healthy" if ok else "unhealthy"
+
+
+def _probe(fn) -> bool:
+    try:
+        return bool(fn())
+    except Exception:
+        return False
+
+
+def health_services(db, cache, vectors, embedder) -> dict[str, object]:
+    """PipesHub's /api/v1/health/services shape. status ignores embedding."""
+    services = {
+        "postgres": _healthy(_probe(db.ping) if db is not None else False),
+        "redis": _healthy(_probe(cache.ping) if cache is not None else False),
+        "qdrant": _healthy(_probe(vectors.ping) if vectors is not None else False),
+        "embedding": _healthy(embedder is not None),
+    }
+    required = ("postgres", "redis", "qdrant")
+    status = "healthy" if all(services[name] == "healthy" for name in required) else "unhealthy"
+    return {"status": status, "services": services}
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="kbindex")
@@ -496,6 +520,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.db = Database(settings.database_url)
+
+    @app.get("/api/v1/health/services")
+    def health_services_route() -> JSONResponse:
+        return JSONResponse(
+            health_services(
+                app.state.db,
+                getattr(app.state, "redis", None),
+                getattr(app.state, "vectors", None),
+                getattr(app.state, "embedder", None),
+            )
+        )
 
     @app.exception_handler(PushRefusal)
     def _refused(_request: Request, exc: PushRefusal) -> JSONResponse:
