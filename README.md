@@ -8,7 +8,7 @@
 docker compose up --build
 ```
 
-API は `http://127.0.0.1:43123` で待ち受ける。初回の起動では `cl-nagoya/ruri-v3-310m` を Hugging Face からダウンロードする。`HF_HOME` の中身はボリューム `hf` に残る。Redis のイメージは 7.2 系で、ライセンスは BSD-3-Clause である。
+API は `http://127.0.0.1:43123` で待ち受ける。Linux でブリッジがコンテナ間のパケットを通さないときは、`docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up --build` を使う。初回の起動では `cl-nagoya/ruri-v3-310m` を Hugging Face からダウンロードする。`HF_HOME` の中身はボリューム `hf` に残る。Redis のイメージは 7.2 系で、ライセンスは BSD-3-Clause である。
 
 モデルをダウンロードせずに動かすときは `config.test.yaml` を使う。`embedding.backend` は `fake` である。
 
