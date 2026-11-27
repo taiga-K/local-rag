@@ -114,3 +114,15 @@ jobs:
         with:
           name: kbindex-settings-windows
           path: apps/settings/release/*.exe
+      - name: Silent install
+        shell: pwsh
+        run: pwsh -File apps/settings/scripts/prove-win-install.ps1 -Phase install -ReleaseDir apps/settings/release
+      - name: Headless app check
+        shell: pwsh
+        run: pwsh -File apps/settings/scripts/prove-win-install.ps1 -Phase check
+      - name: Report docker commands
+        shell: pwsh
+        run: pwsh -File apps/settings/scripts/prove-win-install.ps1 -Phase detect
+      - name: Silent uninstall
+        shell: pwsh
+        run: pwsh -File apps/settings/scripts/prove-win-install.ps1 -Phase uninstall

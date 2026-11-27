@@ -14,7 +14,7 @@ API は `http://127.0.0.1:43123` で待ち受ける。Linux でブリッジが�
 
 前提は Windows、Linux コンテナを動かせる Docker、Git、このリポジトリの clone である。インストーラは Docker を入れない。`docker info` と `docker compose version` が通ることを起動前に確認する。PATH に無いときは `wsl.exe -e docker` を使う。
 
-`apps/settings` で `npm run pack:win` を実行すると NSIS の exe ができる。exe はウィザードを出し、ユーザーごとに入れ、デスクトップにショートカットを作り、最後にアプリを起動する。
+`apps/settings` で `npm run pack:win` を実行すると NSIS の exe ができる。exe はウィザードを出し、ユーザーごとに入れ、デスクトップにショートカットを作り、最後にアプリを起動する。`kbindex settings.exe --check` は画面を出さず、`docker` か `wsl.exe` か、どちらも使えないかを書いて終了する。CI の windows-latest は `/S` で入れてインストール先とショートカットとこの終了コードを確認し、`docker`、`docker compose`、`wsl.exe -e docker` の有無を記録してから `/S` で消す。
 
 初回起動で clone のフォルダを選ぶ。`docker-compose.yml` と `Dockerfile` と `pyproject.toml` があるフォルダだけを受け付ける。選んだパスはアプリの設定に残る。設定画面から後で変えられる。変えたあとはアプリを起動し直す。
 

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   composeUpArgs,
   detectDocker,
+  dockerCheckReport,
   ensureEnv,
   healthReady,
   initialEnvText,
@@ -81,6 +82,12 @@ describe("docker launch", () => {
       expect(up.args).toContain("/mnt/c/src/local-rag");
       expect(up.args).toContain("/mnt/c/src/local-rag/.env");
     }
+  });
+
+  it("writes the mode a headless check can read", () => {
+    expect(dockerCheckReport({ mode: "host", command: "docker" })).toBe("docker-mode=host\ndocker-command=docker\n");
+    expect(dockerCheckReport({ mode: "wsl", command: "wsl.exe" })).toBe("docker-mode=wsl\ndocker-command=wsl.exe\n");
+    expect(dockerCheckReport({ error: "missing\nline" })).toBe("docker-mode=none\ndocker-error=missing line\n");
   });
 
   it("does not try wsl.exe on linux", async () => {

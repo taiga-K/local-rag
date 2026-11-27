@@ -77,6 +77,14 @@ export function composeUpArgs(launch: DockerLaunch, clonePath: string): { comman
   };
 }
 
+export function dockerCheckReport(result: DockerLaunch | { error: string }): string {
+  if ("error" in result) {
+    const error = result.error.replace(/\s+/g, " ").trim();
+    return `docker-mode=none\ndocker-error=${error}\n`;
+  }
+  return `docker-mode=${result.mode}\ndocker-command=${result.command}\n`;
+}
+
 export async function detectDocker(exec: Exec, platform: NodeJS.Platform): Promise<DockerLaunch | { error: string }> {
   const hostInfo = await exec("docker", ["info"]);
   const hostCompose = await exec("docker", ["compose", "version"]);
@@ -138,11 +146,23 @@ export function inspectClone(clonePath: string): { ok: true } | { ok: false; rea
   return { ok: true };
 }
 
-export function spawnExec(command: string, args: string[], cwd?: string): Promise<ExecResult> {
+export function spawnExec(command: string, args: string[], cwd?: string, timeoutMs?: number): Promise<ExecResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd, windowsHide: true });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result: ExecResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(result);
+    };
+    const timer = timeoutMs === undefined ? null : setTimeout(() => {
+      child.kill();
+      finish({ code: 124, stdout, stderr: `${stderr}timeout` });
+    }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
@@ -150,10 +170,16 @@ export function spawnExec(command: string, args: string[], cwd?: string): Promis
       stderr += chunk.toString();
     });
     child.on("error", (error) => {
-      resolve({ code: 127, stdout, stderr: `${stderr}${error.message}` });
+      if (timer) {
+        clearTimeout(timer);
+      }
+      finish({ code: 127, stdout, stderr: `${stderr}${error.message}` });
     });
     child.on("close", (code) => {
-      resolve({ code: code ?? 1, stdout, stderr });
+      if (timer) {
+        clearTimeout(timer);
+      }
+      finish({ code: code ?? 1, stdout, stderr });
     });
   });
 }

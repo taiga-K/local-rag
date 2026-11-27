@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   composeUpArgs,
   detectDocker,
+  dockerCheckReport,
   ensureEnv,
   HEALTH_URL,
   inspectClone,
@@ -17,6 +18,19 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const API_BASE = process.env.KBINDEX_API ?? "http://127.0.0.1:43123";
+const CHECK_COMMAND_MS = 20_000;
+
+function writeCheckReport(report: string): void {
+  const file = process.env.KBINDEX_CHECK_REPORT;
+  if (file) {
+    fs.writeFileSync(file, report, "utf8");
+  }
+  try {
+    process.stdout.write(report);
+  } catch {
+    return;
+  }
+}
 
 function insideFolder(root: string, target: string): boolean {
   let base: string;
@@ -187,6 +201,20 @@ ipcMain.handle("localrag:pick-clone", async (event) => {
 });
 
 void app.whenReady().then(async () => {
+  if (process.argv.includes("--check")) {
+    try {
+      const result = await detectDocker(
+        (command, args, cwd) => spawnExec(command, args, cwd, CHECK_COMMAND_MS),
+        process.platform,
+      );
+      writeCheckReport(dockerCheckReport(result));
+      app.exit(0);
+    } catch (error) {
+      console.error(error);
+      app.exit(1);
+    }
+    return;
+  }
   if (process.argv.includes("--uninstall-stack")) {
     await removeStack(process.argv.includes("delete-postgres"));
     app.exit(0);
