@@ -162,10 +162,22 @@ function Invoke-PhaseUninstall {
   if ($proc.ExitCode -ne 0) {
     throw "silent uninstall exited $($proc.ExitCode)"
   }
-  if (Test-Path -LiteralPath $dest) {
-    throw "install dir remains: $dest"
+  # NSIS copies the uninstaller to %TEMP% and the process we started exits before that copy deletes the files.
+  $gone = $false
+  for ($i = 0; $i -lt 60; $i++) {
+    $dirLeft = Test-Path -LiteralPath $dest
+    $linkLeft = $shortcut -and (Test-Path -LiteralPath $shortcut)
+    if (-not $dirLeft -and -not $linkLeft) {
+      $gone = $true
+      break
+    }
+    Start-Sleep -Seconds 1
   }
-  if ($shortcut -and (Test-Path -LiteralPath $shortcut)) {
+  if (-not $gone) {
+    if (Test-Path -LiteralPath $dest) {
+      Get-ChildItem -LiteralPath $dest -Force | ForEach-Object { Write-Host "LEFT $($_.Name)" }
+      throw "install dir remains: $dest"
+    }
     throw "shortcut remains: $shortcut"
   }
   Write-Host "CLEANUP install dir and shortcut are gone"
