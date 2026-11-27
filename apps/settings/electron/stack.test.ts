@@ -115,6 +115,15 @@ describe("health poll", () => {
   });
 });
 
+describe("installer script", () => {
+  it("skips volume cleanup on upgrade and does not split the NSIS string", () => {
+    const text = fs.readFileSync(new URL("../build/installer.nsh", import.meta.url), "utf8");
+    expect(text).toContain("${ifNot} ${isUpdated}");
+    expect(text).toContain("-EncodedCommand");
+    expect(text).not.toContain("''");
+  });
+});
+
 describe("uninstall volumes", () => {
   it("keeps the postgres volume unless asked", () => {
     const names = ["kbindex_postgres_data", "kbindex_redis_data", "kbindex_hf"];
