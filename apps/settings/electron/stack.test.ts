@@ -8,6 +8,7 @@ import {
   ensureEnv,
   healthReady,
   initialEnvText,
+  inspectClone,
   missingCloneFiles,
   pollHealth,
   volumesToRemove,
@@ -27,6 +28,14 @@ describe("clone and env", () => {
   it("names the files a clone must contain", () => {
     expect(missingCloneFiles(["docker-compose.yml", "Dockerfile", "pyproject.toml"])).toEqual([]);
     expect(missingCloneFiles(["Dockerfile"])).toEqual(["docker-compose.yml", "pyproject.toml"]);
+  });
+
+  it("reports a missing folder instead of throwing", () => {
+    const missing = inspectClone(path.join(os.tmpdir(), "kbindex-missing-clone"));
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.reason).toBe("フォルダを読めません");
+    }
   });
 
   it("writes .env once and leaves an existing file alone", () => {

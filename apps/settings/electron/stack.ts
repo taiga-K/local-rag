@@ -124,8 +124,18 @@ export function writeSavedClone(userData: string, clonePath: string): void {
   fs.renameSync(temporary, file);
 }
 
-export function cloneMarkerNames(clonePath: string): string[] {
-  return fs.readdirSync(clonePath);
+export function inspectClone(clonePath: string): { ok: true } | { ok: false; reason: string } {
+  let names: string[];
+  try {
+    names = fs.readdirSync(clonePath);
+  } catch {
+    return { ok: false, reason: "フォルダを読めません" };
+  }
+  const missing = missingCloneFiles(names);
+  if (missing.length > 0) {
+    return { ok: false, reason: `このフォルダには ${missing.join(", ")} がありません` };
+  }
+  return { ok: true };
 }
 
 export function spawnExec(command: string, args: string[], cwd?: string): Promise<ExecResult> {

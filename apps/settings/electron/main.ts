@@ -3,12 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  cloneMarkerNames,
   composeUpArgs,
   detectDocker,
   ensureEnv,
   HEALTH_URL,
-  missingCloneFiles,
+  inspectClone,
   pollHealth,
   readSavedClone,
   spawnExec,
@@ -138,9 +137,9 @@ async function removeStack(deletePostgres: boolean): Promise<void> {
 }
 
 async function startStack(win: BrowserWindow, clonePath: string): Promise<void> {
-  const missing = missingCloneFiles(cloneMarkerNames(clonePath));
-  if (missing.length > 0) {
-    showStatus(win, `このフォルダには ${missing.join(", ")} がありません。`);
+  const clone = inspectClone(clonePath);
+  if (!clone.ok) {
+    showStatus(win, clone.reason);
     return;
   }
   ensureEnv(clonePath);
@@ -179,9 +178,9 @@ ipcMain.handle("localrag:pick-clone", async (event) => {
   if (!folder) {
     return { ok: false, canceled: true, path: null, error: null };
   }
-  const missing = missingCloneFiles(cloneMarkerNames(folder));
-  if (missing.length > 0) {
-    return { ok: false, canceled: false, path: folder, error: missing.join(", ") };
+  const clone = inspectClone(folder);
+  if (!clone.ok) {
+    return { ok: false, canceled: false, path: folder, error: clone.reason };
   }
   writeSavedClone(app.getPath("userData"), folder);
   return { ok: true, canceled: false, path: folder, error: null };
@@ -199,18 +198,23 @@ void app.whenReady().then(async () => {
     return;
   }
   let clonePath = readSavedClone(app.getPath("userData"));
-  if (!clonePath) {
-    clonePath = await pickClone(win);
-    if (!clonePath) {
+  if (clonePath && !inspectClone(clonePath).ok) {
+    showStatus(win, "保存したフォルダを使えないので、選び直してください。");
+    clonePath = null;
+  }
+  while (!clonePath) {
+    const picked = await pickClone(win);
+    if (!picked) {
       showStatus(win, "フォルダが選ばれていないので、起動できません。");
       return;
     }
-    const missing = missingCloneFiles(cloneMarkerNames(clonePath));
-    if (missing.length > 0) {
-      showStatus(win, `このフォルダには ${missing.join(", ")} がありません。`);
-      return;
+    const clone = inspectClone(picked);
+    if (!clone.ok) {
+      showStatus(win, `${clone.reason}\nもう一度選んでください。`);
+      continue;
     }
-    writeSavedClone(app.getPath("userData"), clonePath);
+    writeSavedClone(app.getPath("userData"), picked);
+    clonePath = picked;
   }
   await startStack(win, clonePath);
 });

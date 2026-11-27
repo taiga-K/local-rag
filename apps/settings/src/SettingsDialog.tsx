@@ -196,7 +196,7 @@ export function SettingsScreen() {
                     return;
                   }
                   if (result.error) {
-                    setNote(`このフォルダには ${result.error} がありません。`);
+                    setNote(result.error);
                   }
                 });
               }}
