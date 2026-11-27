@@ -10,6 +10,22 @@ docker compose up --build
 
 API は `http://127.0.0.1:43123` で待ち受ける。Linux でブリッジがコンテナ間のパケットを通さないときは、`docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up --build` を使う。初回の起動では `cl-nagoya/ruri-v3-310m` を Hugging Face からダウンロードする。`HF_HOME` の中身はボリューム `hf` に残る。Redis のイメージは 7.2 系で、ライセンスは BSD-3-Clause である。
 
+## Windows に入れる
+
+前提は Windows、Linux コンテナを動かせる Docker、Git、このリポジトリの clone である。インストーラは Docker を入れない。`docker info` と `docker compose version` が通ることを起動前に確認する。PATH に無いときは `wsl.exe -e docker` を使う。
+
+`apps/settings` で `npm run pack:win` を実行すると NSIS の exe ができる。exe はウィザードを出し、ユーザーごとに入れ、デスクトップにショートカットを作り、最後にアプリを起動する。
+
+初回起動で clone のフォルダを選ぶ。`docker-compose.yml` と `Dockerfile` と `pyproject.toml` があるフォルダだけを受け付ける。選んだパスはアプリの設定に残る。設定画面から後で変えられる。変えたあとはアプリを起動し直す。
+
+アプリは選んだフォルダで `docker compose -p kbindex up -d --build` を実行する。`.env` が無ければ `COMPOSE_PROJECT_NAME=kbindex` だけを書き、既にある `.env` は上書きしない。`.env` は clone の中に置き、アンインストールでは消さない。Postgres のパスワードは `docker-compose.yml` の `kbindex` であり、`.env` はパスワードを持たない。だから Postgres のボリュームを残しても、パスワードは食い違わない。
+
+`GET /api/v1/health/services` を 5 秒おきに、最大 420 秒見る。`postgres` と `redis` と `qdrant` が `healthy` なら設定画面を開く。`embedding` は表示するだけで、完了の条件にはしない。
+
+更新は、clone で `git pull` してからアプリを起動し直す。新しい exe を上書きインストールしても、`.env` と Docker のボリュームは残る。
+
+アンインストールはアプリを消し、プロジェクト `kbindex` のボリュームを消す。PostgreSQL のボリュームは、削除すると答えたときだけ消す。clone のフォルダは残す。
+
 モデルをダウンロードせずに動かすときは `config.test.yaml` を使う。`embedding.backend` は `fake` である。
 
 ```bash

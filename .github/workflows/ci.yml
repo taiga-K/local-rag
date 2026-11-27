@@ -99,3 +99,18 @@ jobs:
         working-directory: apps/settings
       - run: npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.electron.json
         working-directory: apps/settings
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: apps/settings
+      - run: npm run pack:win
+        working-directory: apps/settings
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kbindex-settings-windows
+          path: apps/settings/release/*.exe

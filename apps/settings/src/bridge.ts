@@ -4,6 +4,13 @@ export type PickFolderResult = { ok: boolean; canceled: boolean; path: string | 
 type LocalRagBridge = {
   openPath: (folder: string) => Promise<OpenPathResult>;
   pickFolder: () => Promise<PickFolderResult>;
+  clonePath?: () => Promise<string | null>;
+  pickClone?: () => Promise<PickFolderResult>;
+};
+
+export type CloneBridge = {
+  clonePath: () => Promise<string | null>;
+  pickClone: () => Promise<PickFolderResult>;
 };
 
 export function folderBridge(): LocalRagBridge | null {
@@ -12,6 +19,14 @@ export function folderBridge(): LocalRagBridge | null {
     return null;
   }
   return candidate;
+}
+
+export function cloneBridge(): CloneBridge | null {
+  const candidate = (window as Window & { localrag?: LocalRagBridge }).localrag;
+  if (!candidate || typeof candidate.clonePath !== "function" || typeof candidate.pickClone !== "function") {
+    return null;
+  }
+  return { clonePath: candidate.clonePath, pickClone: candidate.pickClone };
 }
 
 export function folderPathKey(folder: string): string {

@@ -9,7 +9,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.electron.json && cp electron/preload.cjs dist-electron/preload.cjs",
     "test": "vitest run",
     "e2e": "playwright test",
-    "pack:win": "npm run build && electron-builder --win zip"
+    "pack:win": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@astryxdesign/core": "0.7.16",
@@ -34,6 +34,17 @@
     "productName": "kbindex settings",
     "files": ["dist/**", "dist-electron/**"],
     "directories": {"output": "release"},
-    "win": {"target": ["zip"]}
+    "win": {"target": ["nsis"]},
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "kbindex settings",
+      "runAfterFinish": true,
+      "include": "build/installer.nsh"
+    }
   }
 }
