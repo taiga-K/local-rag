@@ -182,16 +182,24 @@ function Invoke-PhaseUninstall {
   if ($shortcut -and (Test-Path -LiteralPath $shortcut)) {
     throw "shortcut remains: $shortcut"
   }
-  if (Test-Path -LiteralPath $dest) {
-    $left = @(Get-ChildItem -LiteralPath $dest -Force)
-    foreach ($item in $left) {
-      Write-Host "LEFT $($item.Name)"
+  for ($i = 0; $i -lt 30; $i++) {
+    if (-not (Test-Path -LiteralPath $dest)) {
+      break
     }
+    $left = @(Get-ChildItem -LiteralPath $dest -Force -ErrorAction SilentlyContinue)
     if ($left.Count -gt 0) {
+      foreach ($item in $left) {
+        Write-Host "LEFT $($item.Name)"
+      }
       throw "install dir not empty: $dest"
     }
-    Remove-Item -LiteralPath $dest -Force
-    Write-Host "CLEANUP removed empty install dir"
+    try {
+      Remove-Item -LiteralPath $dest -Force -ErrorAction Stop
+      Write-Host "CLEANUP removed empty install dir"
+      break
+    } catch {
+      Start-Sleep -Seconds 1
+    }
   }
   if (Test-Path -LiteralPath $dest) {
     throw "install dir remains: $dest"
