@@ -187,21 +187,26 @@ function Invoke-PhaseUninstall {
       break
     }
     $left = @(Get-ChildItem -LiteralPath $dest -Force -ErrorAction SilentlyContinue)
-    if ($left.Count -gt 0) {
-      foreach ($item in $left) {
-        Write-Host "LEFT $($item.Name)"
+    if ($left.Count -eq 0) {
+      try {
+        Remove-Item -LiteralPath $dest -Force -ErrorAction Stop
+        Write-Host "CLEANUP removed empty install dir"
+        break
+      } catch {
+        Start-Sleep -Seconds 1
+        continue
       }
-      throw "install dir not empty: $dest"
     }
-    try {
-      Remove-Item -LiteralPath $dest -Force -ErrorAction Stop
-      Write-Host "CLEANUP removed empty install dir"
-      break
-    } catch {
-      Start-Sleep -Seconds 1
-    }
+    Start-Sleep -Seconds 1
   }
   if (Test-Path -LiteralPath $dest) {
+    $left = @(Get-ChildItem -LiteralPath $dest -Force -ErrorAction SilentlyContinue)
+    foreach ($item in $left) {
+      Write-Host "LEFT $($item.Name)"
+    }
+    if ($left.Count -gt 0) {
+      throw "install dir not empty: $dest"
+    }
     throw "install dir remains: $dest"
   }
   Write-Host "CLEANUP app files and shortcut are gone"
